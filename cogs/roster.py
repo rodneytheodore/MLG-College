@@ -48,7 +48,7 @@ class Roster(commands.Cog):
             if not claimed:
                 continue
 
-            await channel.send(f"**{conf_name}**")
+            await channel.send(f"**{conf_name}**", allowed_mentions=discord.AllowedMentions.none())
 
             for team in claimed:
                 owner_id = roster[team["abbr"].upper()]["user_id"]
@@ -59,7 +59,7 @@ class Roster(commands.Cog):
                 )
                 if team.get("logo"):
                     embed.set_thumbnail(url=team["logo"])
-                await channel.send(embed=embed)
+                await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
 
     # ---------- Commands ----------
 
