@@ -81,14 +81,16 @@ class Roster(commands.Cog):
             await channel.send(f"**{conf_name}**", allowed_mentions=discord.AllowedMentions.none())
 
             for team in claimed:
-                owner_id = roster[team["abbr"].upper()]["user_id"]
+                owner = roster[team["abbr"].upper()]
+                padded_title = team["name"].ljust(40, "\u2003")  # pad with invisible em-spaces for consistent width
                 embed = discord.Embed(
-                    title=team["name"],
-                    description=f"Owner: <@{owner_id}>",
+                    title=padded_title,
                     color=int(team["color"], 16) if team.get("color") else discord.Color.default(),
                 )
-                if team.get("logo"):
-                    embed.set_thumbnail(url=team["logo"])
+                embed.set_footer(
+                    text=f"Owner: {owner['username']}",
+                    icon_url=team.get("logo") or discord.Embed.Empty,
+                )
                 await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
 
     # ---------- Commands ----------
