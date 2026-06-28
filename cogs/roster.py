@@ -12,8 +12,13 @@ from utils.data import (
 )
 
 
+ADMIN_ROLE_NAME = "Admin"
+
+
 def is_admin(interaction: discord.Interaction) -> bool:
-    return interaction.user.guild_permissions.administrator
+    if interaction.user.guild_permissions.administrator:
+        return True
+    return any(role.name == ADMIN_ROLE_NAME for role in interaction.user.roles)
 
 
 class Roster(commands.Cog):
