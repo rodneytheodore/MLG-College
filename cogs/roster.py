@@ -83,9 +83,9 @@ class Roster(commands.Cog):
             for team in claimed:
                 owner_id = roster[team["abbr"].upper()]["user_id"]
                 display_name = team.get("school", team["name"])
-                padded_name = display_name.ljust(40, "\u2003")  # pad with invisible em-spaces for consistent width
+                padded_name = display_name.ljust(16, "\u2003")  # pad with invisible em-spaces for consistent width
                 embed = discord.Embed(
-                    description=f"**{padded_name}** — Owner: <@{owner_id}>",
+                    description=f"**{padded_name}** — <@{owner_id}>",
                     color=int(team["color"], 16) if team.get("color") else discord.Color.default(),
                 )
                 if team.get("logo"):
