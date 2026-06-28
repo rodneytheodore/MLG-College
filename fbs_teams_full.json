@@ -1,0 +1,1266 @@
+{
+  "ACC": [
+    {
+      "id": "103",
+      "abbr": "BC",
+      "name": "Boston College Eagles",
+      "color": "8c2232",
+      "altColor": "dbcca6",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/103.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/103.png"
+    },
+    {
+      "id": "25",
+      "abbr": "CAL",
+      "name": "California Golden Bears",
+      "color": "041e42",
+      "altColor": "ffc72c",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/25.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/25.png"
+    },
+    {
+      "id": "228",
+      "abbr": "CLEM",
+      "name": "Clemson Tigers",
+      "color": "f56600",
+      "altColor": "ffffff",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/228.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/228.png"
+    },
+    {
+      "id": "150",
+      "abbr": "DUKE",
+      "name": "Duke Blue Devils",
+      "color": "00539b",
+      "altColor": "ffffff",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/150.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/150.png"
+    },
+    {
+      "id": "52",
+      "abbr": "FSU",
+      "name": "Florida State Seminoles",
+      "color": "782f40",
+      "altColor": "ceb888",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/52.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/52.png"
+    },
+    {
+      "id": "59",
+      "abbr": "GT",
+      "name": "Georgia Tech Yellow Jackets",
+      "color": "b3a369",
+      "altColor": "ffffff",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/59.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/59.png"
+    },
+    {
+      "id": "97",
+      "abbr": "LOU",
+      "name": "Louisville Cardinals",
+      "color": "c9001f",
+      "altColor": "ffffff",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/97.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/97.png"
+    },
+    {
+      "id": "2390",
+      "abbr": "MIA",
+      "name": "Miami Hurricanes",
+      "color": "f47423",
+      "altColor": "035131",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/2390.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/2390.png"
+    },
+    {
+      "id": "152",
+      "abbr": "NCSU",
+      "name": "NC State Wolfpack",
+      "color": "cc0000",
+      "altColor": "ffffff",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/152.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/152.png"
+    },
+    {
+      "id": "153",
+      "abbr": "UNC",
+      "name": "North Carolina Tar Heels",
+      "color": "7bafd4",
+      "altColor": "13294b",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/153.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/153.png"
+    },
+    {
+      "id": "221",
+      "abbr": "PITT",
+      "name": "Pittsburgh Panthers",
+      "color": "003594",
+      "altColor": "ffb81c",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/221.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/221.png"
+    },
+    {
+      "id": "2567",
+      "abbr": "SMU",
+      "name": "SMU Mustangs",
+      "color": "a80000",
+      "altColor": "0033a1",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/2567.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/2567.png"
+    },
+    {
+      "id": "24",
+      "abbr": "STAN",
+      "name": "Stanford Cardinal",
+      "color": "8c1515",
+      "altColor": "ffffff",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/24.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/24.png"
+    },
+    {
+      "id": "183",
+      "abbr": "SYR",
+      "name": "Syracuse Orange",
+      "color": "000e54",
+      "altColor": "ff431b",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/183.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/183.png"
+    },
+    {
+      "id": "258",
+      "abbr": "UVA",
+      "name": "Virginia Cavaliers",
+      "color": "232d4b",
+      "altColor": "f84c1e",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/258.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/258.png"
+    },
+    {
+      "id": "259",
+      "abbr": "VT",
+      "name": "Virginia Tech Hokies",
+      "color": "6a2c3e",
+      "altColor": "cf4520",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/259.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/259.png"
+    },
+    {
+      "id": "154",
+      "abbr": "WAKE",
+      "name": "Wake Forest Demon Deacons",
+      "color": "ceb888",
+      "altColor": "2c2a29",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/154.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/154.png"
+    }
+  ],
+  "American": [
+    {
+      "id": "349",
+      "abbr": "ARMY",
+      "name": "Army Black Knights",
+      "color": "000000",
+      "altColor": "d3bc8d",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/349.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/349.png"
+    },
+    {
+      "id": "2429",
+      "abbr": "CLT",
+      "name": "Charlotte 49ers",
+      "color": "005035",
+      "altColor": "a49665",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/2429.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/2429.png"
+    },
+    {
+      "id": "151",
+      "abbr": "ECU",
+      "name": "East Carolina Pirates",
+      "color": "582c83",
+      "altColor": "ffc72c",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/151.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/151.png"
+    },
+    {
+      "id": "2226",
+      "abbr": "FAU",
+      "name": "Florida Atlantic Owls",
+      "color": "003366",
+      "altColor": "cc0000",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/2226.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/2226.png"
+    },
+    {
+      "id": "235",
+      "abbr": "MEM",
+      "name": "Memphis Tigers",
+      "color": "004991",
+      "altColor": "8e908f",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/235.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/235.png"
+    },
+    {
+      "id": "2426",
+      "abbr": "NAVY",
+      "name": "Navy Midshipmen",
+      "color": "00225b",
+      "altColor": "b5a67c",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/2426.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/2426.png"
+    },
+    {
+      "id": "249",
+      "abbr": "UNT",
+      "name": "North Texas Mean Green",
+      "color": "068f33",
+      "altColor": "ffffff",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/249.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/249.png"
+    },
+    {
+      "id": "242",
+      "abbr": "RICE",
+      "name": "Rice Owls",
+      "color": "00205b",
+      "altColor": "c1c6c8",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/242.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/242.png"
+    },
+    {
+      "id": "58",
+      "abbr": "USF",
+      "name": "South Florida Bulls",
+      "color": "006747",
+      "altColor": "cfc493",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/58.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/58.png"
+    },
+    {
+      "id": "218",
+      "abbr": "TEM",
+      "name": "Temple Owls",
+      "color": "a41e35",
+      "altColor": "ffffff",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/218.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/218.png"
+    },
+    {
+      "id": "2655",
+      "abbr": "TULN",
+      "name": "Tulane Green Wave",
+      "color": "006747",
+      "altColor": "418fde",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/2655.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/2655.png"
+    },
+    {
+      "id": "202",
+      "abbr": "TLSA",
+      "name": "Tulsa Golden Hurricane",
+      "color": "003595",
+      "altColor": "d0b787",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/202.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/202.png"
+    },
+    {
+      "id": "5",
+      "abbr": "UAB",
+      "name": "UAB Blazers",
+      "color": "1a5632",
+      "altColor": "fdb913",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/5.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/5.png"
+    },
+    {
+      "id": "2636",
+      "abbr": "UTSA",
+      "name": "UTSA Roadrunners",
+      "color": "0c2340",
+      "altColor": "f15a22",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/2636.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/2636.png"
+    }
+  ],
+  "Big 12": [
+    {
+      "id": "9",
+      "abbr": "ASU",
+      "name": "Arizona State Sun Devils",
+      "color": "ffc627",
+      "altColor": "8c1d40",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/9.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/9.png"
+    },
+    {
+      "id": "12",
+      "abbr": "ARIZ",
+      "name": "Arizona Wildcats",
+      "color": "cc0033",
+      "altColor": "003366",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/12.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/12.png"
+    },
+    {
+      "id": "252",
+      "abbr": "BYU",
+      "name": "BYU Cougars",
+      "color": "0047ba",
+      "altColor": "002e5d",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/252.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/252.png"
+    },
+    {
+      "id": "239",
+      "abbr": "BAY",
+      "name": "Baylor Bears",
+      "color": "154734",
+      "altColor": "ffb81c",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/239.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/239.png"
+    },
+    {
+      "id": "2132",
+      "abbr": "CIN",
+      "name": "Cincinnati Bearcats",
+      "color": "000000",
+      "altColor": "e00122",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/2132.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/2132.png"
+    },
+    {
+      "id": "38",
+      "abbr": "COLO",
+      "name": "Colorado Buffaloes",
+      "color": "cfb87c",
+      "altColor": "000000",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/38.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/38.png"
+    },
+    {
+      "id": "248",
+      "abbr": "HOU",
+      "name": "Houston Cougars",
+      "color": "c8102e",
+      "altColor": "ffffff",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/248.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/248.png"
+    },
+    {
+      "id": "66",
+      "abbr": "ISU",
+      "name": "Iowa State Cyclones",
+      "color": "ae192d",
+      "altColor": "ffc72a",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/66.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/66.png"
+    },
+    {
+      "id": "2305",
+      "abbr": "KU",
+      "name": "Kansas Jayhawks",
+      "color": "0051ba",
+      "altColor": "e8000d",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/2305.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/2305.png"
+    },
+    {
+      "id": "2306",
+      "abbr": "KSU",
+      "name": "Kansas State Wildcats",
+      "color": "330a57",
+      "altColor": "e2e3e4",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/2306.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/2306.png"
+    },
+    {
+      "id": "197",
+      "abbr": "OKST",
+      "name": "Oklahoma State Cowboys",
+      "color": "fe5c00",
+      "altColor": "000000",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/197.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/197.png"
+    },
+    {
+      "id": "2628",
+      "abbr": "TCU",
+      "name": "TCU Horned Frogs",
+      "color": "4d1979",
+      "altColor": "ffffff",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/2628.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/2628.png"
+    },
+    {
+      "id": "2641",
+      "abbr": "TTU",
+      "name": "Texas Tech Red Raiders",
+      "color": "da291c",
+      "altColor": "000000",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/2641.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/2641.png"
+    },
+    {
+      "id": "2116",
+      "abbr": "UCF",
+      "name": "UCF Knights",
+      "color": "000000",
+      "altColor": "b4a169",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/2116.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/2116.png"
+    },
+    {
+      "id": "254",
+      "abbr": "UTAH",
+      "name": "Utah Utes",
+      "color": "be0000",
+      "altColor": "ffffff",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/254.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/254.png"
+    },
+    {
+      "id": "277",
+      "abbr": "WVU",
+      "name": "West Virginia Mountaineers",
+      "color": "eaaa00",
+      "altColor": "002855",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/277.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/277.png"
+    }
+  ],
+  "Big Ten": [
+    {
+      "id": "356",
+      "abbr": "ILL",
+      "name": "Illinois Fighting Illini",
+      "color": "ff5f05",
+      "altColor": "13294b",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/356.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/356.png"
+    },
+    {
+      "id": "84",
+      "abbr": "IU",
+      "name": "Indiana Hoosiers",
+      "color": "970310",
+      "altColor": "ffffff",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/84.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/84.png"
+    },
+    {
+      "id": "2294",
+      "abbr": "IOWA",
+      "name": "Iowa Hawkeyes",
+      "color": "231f20",
+      "altColor": "fcd116",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/2294.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/2294.png"
+    },
+    {
+      "id": "120",
+      "abbr": "MD",
+      "name": "Maryland Terrapins",
+      "color": "ce1126",
+      "altColor": "ffffff",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/120.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/120.png"
+    },
+    {
+      "id": "127",
+      "abbr": "MSU",
+      "name": "Michigan State Spartans",
+      "color": "173f35",
+      "altColor": "ffffff",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/127.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/127.png"
+    },
+    {
+      "id": "130",
+      "abbr": "MICH",
+      "name": "Michigan Wolverines",
+      "color": "00274c",
+      "altColor": "ffcb05",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/130.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/130.png"
+    },
+    {
+      "id": "135",
+      "abbr": "MINN",
+      "name": "Minnesota Golden Gophers",
+      "color": "5e0a2f",
+      "altColor": "fab41c",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/135.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/135.png"
+    },
+    {
+      "id": "158",
+      "abbr": "NEB",
+      "name": "Nebraska Cornhuskers",
+      "color": "e31937",
+      "altColor": "ffffff",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/158.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/158.png"
+    },
+    {
+      "id": "77",
+      "abbr": "NU",
+      "name": "Northwestern Wildcats",
+      "color": "492f92",
+      "altColor": "ffffff",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/77.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/77.png"
+    },
+    {
+      "id": "194",
+      "abbr": "OSU",
+      "name": "Ohio State Buckeyes",
+      "color": "ba0c2f",
+      "altColor": "a8adb4",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/194.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/194.png"
+    },
+    {
+      "id": "2483",
+      "abbr": "ORE",
+      "name": "Oregon Ducks",
+      "color": "00934b",
+      "altColor": "fff41b",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/2483.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/2483.png"
+    },
+    {
+      "id": "213",
+      "abbr": "PSU",
+      "name": "Penn State Nittany Lions",
+      "color": "061440",
+      "altColor": "ffffff",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/213.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/213.png"
+    },
+    {
+      "id": "2509",
+      "abbr": "PUR",
+      "name": "Purdue Boilermakers",
+      "color": "ceb888",
+      "altColor": "000000",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/2509.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/2509.png"
+    },
+    {
+      "id": "164",
+      "abbr": "RUTG",
+      "name": "Rutgers Scarlet Knights",
+      "color": "ce0e2d",
+      "altColor": "ffffff",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/164.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/164.png"
+    },
+    {
+      "id": "26",
+      "abbr": "UCLA",
+      "name": "UCLA Bruins",
+      "color": "2774ae",
+      "altColor": "f2a900",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/26.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/26.png"
+    },
+    {
+      "id": "30",
+      "abbr": "USC",
+      "name": "USC Trojans",
+      "color": "9d2235",
+      "altColor": "ffc72c",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/30.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/30.png"
+    },
+    {
+      "id": "264",
+      "abbr": "WASH",
+      "name": "Washington Huskies",
+      "color": "33006f",
+      "altColor": "e8d3a2",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/264.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/264.png"
+    },
+    {
+      "id": "275",
+      "abbr": "WIS",
+      "name": "Wisconsin Badgers",
+      "color": "a00000",
+      "altColor": "ffffff",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/275.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/275.png"
+    }
+  ],
+  "Conference USA": [
+    {
+      "id": "48",
+      "abbr": "DEL",
+      "name": "Delaware Blue Hens",
+      "color": "00539f",
+      "altColor": "ffd200",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/48.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/48.png"
+    },
+    {
+      "id": "2229",
+      "abbr": "FIU",
+      "name": "Florida International Panthers",
+      "color": "091f3f",
+      "altColor": "c3993f",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/2229.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/2229.png"
+    },
+    {
+      "id": "55",
+      "abbr": "JXST",
+      "name": "Jacksonville State Gamecocks",
+      "color": "cc0000",
+      "altColor": "000000",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/55.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/55.png"
+    },
+    {
+      "id": "338",
+      "abbr": "KENN",
+      "name": "Kennesaw State Owls",
+      "color": "fdbb30",
+      "altColor": "0b1315",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/338.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/338.png"
+    },
+    {
+      "id": "2335",
+      "abbr": "LIB",
+      "name": "Liberty Flames",
+      "color": "0a254e",
+      "altColor": "b72025",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/2335.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/2335.png"
+    },
+    {
+      "id": "2348",
+      "abbr": "LT",
+      "name": "Louisiana Tech Bulldogs",
+      "color": "003087",
+      "altColor": "cb333b",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/2348.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/2348.png"
+    },
+    {
+      "id": "2393",
+      "abbr": "MTSU",
+      "name": "Middle Tennessee Blue Raiders",
+      "color": "036eb7",
+      "altColor": "ffffff",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/2393.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/2393.png"
+    },
+    {
+      "id": "2623",
+      "abbr": "MOST",
+      "name": "Missouri State Bears",
+      "color": "5e0009",
+      "altColor": "ffffff",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/2623.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/2623.png"
+    },
+    {
+      "id": "166",
+      "abbr": "NMSU",
+      "name": "New Mexico State Aggies",
+      "color": "7e141b",
+      "altColor": "231f20",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/166.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/166.png"
+    },
+    {
+      "id": "2534",
+      "abbr": "SHSU",
+      "name": "Sam Houston Bearkats",
+      "color": "f56423",
+      "altColor": "ffffff",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/2534.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/2534.png"
+    },
+    {
+      "id": "98",
+      "abbr": "WKU",
+      "name": "Western Kentucky Hilltoppers",
+      "color": "e13a3e",
+      "altColor": "ffffff",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/98.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/98.png"
+    }
+  ],
+  "FBS Independents": [
+    {
+      "id": "87",
+      "abbr": "ND",
+      "name": "Notre Dame Fighting Irish",
+      "color": "062340",
+      "altColor": "c99700",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/87.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/87.png"
+    },
+    {
+      "id": "41",
+      "abbr": "CONN",
+      "name": "UConn Huskies",
+      "color": "0c2340",
+      "altColor": "a2aaad",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/41.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/41.png"
+    }
+  ],
+  "Mid-American": [
+    {
+      "id": "2006",
+      "abbr": "AKR",
+      "name": "Akron Zips",
+      "color": "041e42",
+      "altColor": "c5b783",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/2006.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/2006.png"
+    },
+    {
+      "id": "2050",
+      "abbr": "BALL",
+      "name": "Ball State Cardinals",
+      "color": "ba0c2f",
+      "altColor": "ffffff",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/2050.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/2050.png"
+    },
+    {
+      "id": "189",
+      "abbr": "BGSU",
+      "name": "Bowling Green Falcons",
+      "color": "fd5000",
+      "altColor": "4f2c1d",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/189.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/189.png"
+    },
+    {
+      "id": "2084",
+      "abbr": "BUF",
+      "name": "Buffalo Bulls",
+      "color": "005bbb",
+      "altColor": "ffffff",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/2084.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/2084.png"
+    },
+    {
+      "id": "2117",
+      "abbr": "CMU",
+      "name": "Central Michigan Chippewas",
+      "color": "4c0027",
+      "altColor": "fbab18",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/2117.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/2117.png"
+    },
+    {
+      "id": "2199",
+      "abbr": "EMU",
+      "name": "Eastern Michigan Eagles",
+      "color": "006938",
+      "altColor": "ffffff",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/2199.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/2199.png"
+    },
+    {
+      "id": "2309",
+      "abbr": "KENT",
+      "name": "Kent State Golden Flashes",
+      "color": "002664",
+      "altColor": "eaab00",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/2309.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/2309.png"
+    },
+    {
+      "id": "113",
+      "abbr": "MASS",
+      "name": "Massachusetts Minutemen",
+      "color": "881c1c",
+      "altColor": "ffffff",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/113.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/113.png"
+    },
+    {
+      "id": "193",
+      "abbr": "M-OH",
+      "name": "Miami (OH) RedHawks",
+      "color": "c41230",
+      "altColor": "ffffff",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/193.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/193.png"
+    },
+    {
+      "id": "195",
+      "abbr": "OHIO",
+      "name": "Ohio Bobcats",
+      "color": "154734",
+      "altColor": "ffffff",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/195.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/195.png"
+    },
+    {
+      "id": "16",
+      "abbr": "SAC",
+      "name": "Sacramento State Hornets",
+      "color": "00573C",
+      "altColor": "cdb97d",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/16.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/16.png"
+    },
+    {
+      "id": "2649",
+      "abbr": "TOL",
+      "name": "Toledo Rockets",
+      "color": "0b2240",
+      "altColor": "ffcd00",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/2649.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/2649.png"
+    },
+    {
+      "id": "2711",
+      "abbr": "WMU",
+      "name": "Western Michigan Broncos",
+      "color": "532e1f",
+      "altColor": "f1c500",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/2711.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/2711.png"
+    }
+  ],
+  "Mountain West": [
+    {
+      "id": "2005",
+      "abbr": "AF",
+      "name": "Air Force Falcons",
+      "color": "003594",
+      "altColor": "ffffff",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/2005.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/2005.png"
+    },
+    {
+      "id": "62",
+      "abbr": "HAW",
+      "name": "Hawai'i Rainbow Warriors",
+      "color": "005737",
+      "altColor": "000000",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/62.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/62.png"
+    },
+    {
+      "id": "2440",
+      "abbr": "NEV",
+      "name": "Nevada Wolf Pack",
+      "color": "041e42",
+      "altColor": "8a8d8f",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/2440.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/2440.png"
+    },
+    {
+      "id": "167",
+      "abbr": "UNM",
+      "name": "New Mexico Lobos",
+      "color": "ba0c2f",
+      "altColor": "a7a8aa",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/167.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/167.png"
+    },
+    {
+      "id": "2449",
+      "abbr": "NDSU",
+      "name": "North Dakota State Bison",
+      "color": "01402A",
+      "altColor": "ffffff",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/2449.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/2449.png"
+    },
+    {
+      "id": "2459",
+      "abbr": "NIU",
+      "name": "Northern Illinois Huskies",
+      "color": "c8102e",
+      "altColor": "000000",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/2459.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/2459.png"
+    },
+    {
+      "id": "23",
+      "abbr": "SJSU",
+      "name": "San Jos\u00e9 State Spartans",
+      "color": "0038a8",
+      "altColor": "ffb81a",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/23.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/23.png"
+    },
+    {
+      "id": "2439",
+      "abbr": "UNLV",
+      "name": "UNLV Rebels",
+      "color": "cf0a2c",
+      "altColor": "cac8c8",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/2439.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/2439.png"
+    },
+    {
+      "id": "2638",
+      "abbr": "UTEP",
+      "name": "UTEP Miners",
+      "color": "ff8200",
+      "altColor": "041e42",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/2638.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/2638.png"
+    },
+    {
+      "id": "2751",
+      "abbr": "WYO",
+      "name": "Wyoming Cowboys",
+      "color": "492f24",
+      "altColor": "ffc425",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/2751.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/2751.png"
+    }
+  ],
+  "Pac-12": [
+    {
+      "id": "68",
+      "abbr": "BOIS",
+      "name": "Boise State Broncos",
+      "color": "0033a0",
+      "altColor": "d64309",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/68.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/68.png"
+    },
+    {
+      "id": "36",
+      "abbr": "CSU",
+      "name": "Colorado State Rams",
+      "color": "004c23",
+      "altColor": "c8c372",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/36.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/36.png"
+    },
+    {
+      "id": "278",
+      "abbr": "FRES",
+      "name": "Fresno State Bulldogs",
+      "color": "b1102b",
+      "altColor": "13284c",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/278.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/278.png"
+    },
+    {
+      "id": "204",
+      "abbr": "ORST",
+      "name": "Oregon State Beavers",
+      "color": "dc4405",
+      "altColor": "000000",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/204.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/204.png"
+    },
+    {
+      "id": "21",
+      "abbr": "SDSU",
+      "name": "San Diego State Aztecs",
+      "color": "a6192e",
+      "altColor": "000000",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/21.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/21.png"
+    },
+    {
+      "id": "326",
+      "abbr": "TXST",
+      "name": "Texas State Bobcats",
+      "color": "501214",
+      "altColor": "6a5638",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/326.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/326.png"
+    },
+    {
+      "id": "328",
+      "abbr": "USU",
+      "name": "Utah State Aggies",
+      "color": "0f2439",
+      "altColor": "ffffff",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/328.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/328.png"
+    },
+    {
+      "id": "265",
+      "abbr": "WSU",
+      "name": "Washington State Cougars",
+      "color": "a60f2d",
+      "altColor": "4d4d4d",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/265.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/265.png"
+    }
+  ],
+  "SEC": [
+    {
+      "id": "333",
+      "abbr": "ALA",
+      "name": "Alabama Crimson Tide",
+      "color": "9e1b32",
+      "altColor": "ffffff",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/333.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/333.png"
+    },
+    {
+      "id": "8",
+      "abbr": "ARK",
+      "name": "Arkansas Razorbacks",
+      "color": "a32136",
+      "altColor": "ffffff",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/8.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/8.png"
+    },
+    {
+      "id": "2",
+      "abbr": "AUB",
+      "name": "Auburn Tigers",
+      "color": "002b5c",
+      "altColor": "f26522",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/2.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/2.png"
+    },
+    {
+      "id": "57",
+      "abbr": "FLA",
+      "name": "Florida Gators",
+      "color": "0021a5",
+      "altColor": "fa4616",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/57.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/57.png"
+    },
+    {
+      "id": "61",
+      "abbr": "UGA",
+      "name": "Georgia Bulldogs",
+      "color": "ba0c2f",
+      "altColor": "2c2a29",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/61.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/61.png"
+    },
+    {
+      "id": "96",
+      "abbr": "UK",
+      "name": "Kentucky Wildcats",
+      "color": "0033a0",
+      "altColor": "ffffff",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/96.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/96.png"
+    },
+    {
+      "id": "99",
+      "abbr": "LSU",
+      "name": "LSU Tigers",
+      "color": "461d76",
+      "altColor": "fdd023",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/99.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/99.png"
+    },
+    {
+      "id": "344",
+      "abbr": "MSST",
+      "name": "Mississippi State Bulldogs",
+      "color": "5d1725",
+      "altColor": "c1c6c8",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/344.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/344.png"
+    },
+    {
+      "id": "142",
+      "abbr": "MIZ",
+      "name": "Missouri Tigers",
+      "color": "f1b82d",
+      "altColor": "000000",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/142.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/142.png"
+    },
+    {
+      "id": "201",
+      "abbr": "OU",
+      "name": "Oklahoma Sooners",
+      "color": "990000",
+      "altColor": "ffffff",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/201.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/201.png"
+    },
+    {
+      "id": "145",
+      "abbr": "MISS",
+      "name": "Ole Miss Rebels",
+      "color": "13294b",
+      "altColor": "cf142b",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/145.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/145.png"
+    },
+    {
+      "id": "2579",
+      "abbr": "SC",
+      "name": "South Carolina Gamecocks",
+      "color": "73000a",
+      "altColor": "000000",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/2579.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/2579.png"
+    },
+    {
+      "id": "2633",
+      "abbr": "TENN",
+      "name": "Tennessee Volunteers",
+      "color": "ff8200",
+      "altColor": "ffffff",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/2633.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/2633.png"
+    },
+    {
+      "id": "245",
+      "abbr": "TA&M",
+      "name": "Texas A&M Aggies",
+      "color": "500000",
+      "altColor": "ffffff",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/245.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/245.png"
+    },
+    {
+      "id": "251",
+      "abbr": "TEX",
+      "name": "Texas Longhorns",
+      "color": "af5c37",
+      "altColor": "ffffff",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/251.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/251.png"
+    },
+    {
+      "id": "238",
+      "abbr": "VAN",
+      "name": "Vanderbilt Commodores",
+      "color": "000000",
+      "altColor": "cfae70",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/238.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/238.png"
+    }
+  ],
+  "Sun Belt": [
+    {
+      "id": "2026",
+      "abbr": "APP",
+      "name": "App State Mountaineers",
+      "color": "000000",
+      "altColor": "ffcd00",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/2026.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/2026.png"
+    },
+    {
+      "id": "2032",
+      "abbr": "ARST",
+      "name": "Arkansas State Red Wolves",
+      "color": "cc092f",
+      "altColor": "000000",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/2032.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/2032.png"
+    },
+    {
+      "id": "324",
+      "abbr": "CCU",
+      "name": "Coastal Carolina Chanticleers",
+      "color": "006f71",
+      "altColor": "a27752",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/324.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/324.png"
+    },
+    {
+      "id": "290",
+      "abbr": "GASO",
+      "name": "Georgia Southern Eagles",
+      "color": "041e42",
+      "altColor": "a3aaae",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/290.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/290.png"
+    },
+    {
+      "id": "2247",
+      "abbr": "GAST",
+      "name": "Georgia State Panthers",
+      "color": "0039a6",
+      "altColor": "ffffff",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/2247.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/2247.png"
+    },
+    {
+      "id": "256",
+      "abbr": "JMU",
+      "name": "James Madison Dukes",
+      "color": "450084",
+      "altColor": "cbb677",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/256.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/256.png"
+    },
+    {
+      "id": "309",
+      "abbr": "UL",
+      "name": "Louisiana Ragin' Cajuns",
+      "color": "ce181e",
+      "altColor": "000000",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/309.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/309.png"
+    },
+    {
+      "id": "276",
+      "abbr": "MRSH",
+      "name": "Marshall Thundering Herd",
+      "color": "00b140",
+      "altColor": "000000",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/276.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/276.png"
+    },
+    {
+      "id": "295",
+      "abbr": "ODU",
+      "name": "Old Dominion Monarchs",
+      "color": "003768",
+      "altColor": "a1d2f1",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/295.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/295.png"
+    },
+    {
+      "id": "6",
+      "abbr": "USA",
+      "name": "South Alabama Jaguars",
+      "color": "00205b",
+      "altColor": "bf0d3e",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/6.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/6.png"
+    },
+    {
+      "id": "2572",
+      "abbr": "USM",
+      "name": "Southern Miss Golden Eagles",
+      "color": "ffc72c",
+      "altColor": "231f20",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/2572.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/2572.png"
+    },
+    {
+      "id": "2653",
+      "abbr": "TROY",
+      "name": "Troy Trojans",
+      "color": "862633",
+      "altColor": "b1b1b1",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/2653.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/2653.png"
+    },
+    {
+      "id": "2433",
+      "abbr": "ULM",
+      "name": "UL Monroe Warhawks",
+      "color": "840029",
+      "altColor": "fdb913",
+      "logo": "https://a.espncdn.com/i/teamlogos/ncaa/500/2433.png",
+      "logoDark": "https://a.espncdn.com/i/teamlogos/ncaa/500-dark/2433.png"
+    }
+  ]
+}
