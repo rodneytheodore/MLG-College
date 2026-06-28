@@ -93,6 +93,12 @@ class Roster(commands.Cog):
                 )
                 await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
 
+        claimed_count = len(roster)
+        await channel.send(
+            f"**{claimed_count}/32 teams claimed**",
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
     # ---------- Commands ----------
 
     @app_commands.command(name="post_roster", description="Set this channel as the live roster display (admin only)")
