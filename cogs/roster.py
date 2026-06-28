@@ -21,6 +21,31 @@ def is_admin(interaction: discord.Interaction) -> bool:
     return any(role.name == ADMIN_ROLE_NAME for role in interaction.user.roles)
 
 
+def resolve_team(query: str, teams: dict):
+    """Resolve user input to a team abbreviation.
+    Tries exact abbreviation match first, then exact name match,
+    then a unique partial name match. Returns (abbr, error_message)."""
+    query = query.strip()
+    upper = query.upper()
+
+    if upper in teams:
+        return upper, None
+
+    lower = query.lower()
+    exact_name_matches = [abbr for abbr, t in teams.items() if t["name"].lower() == lower]
+    if len(exact_name_matches) == 1:
+        return exact_name_matches[0], None
+
+    partial_matches = [abbr for abbr, t in teams.items() if lower in t["name"].lower()]
+    if len(partial_matches) == 1:
+        return partial_matches[0], None
+    if len(partial_matches) > 1:
+        names = ", ".join(teams[a]["name"] for a in partial_matches[:8])
+        return None, f"That matches multiple teams: {names}. Try being more specific or use the abbreviation."
+
+    return None, f"Couldn't find a team matching `{query}`. Try the team name or abbreviation, e.g. `UGA`."
+
+
 class Roster(commands.Cog):
     """Commands for assigning, vacating, and displaying the league roster."""
 
@@ -84,18 +109,15 @@ class Roster(commands.Cog):
         await self.refresh_roster_channel()
 
     @app_commands.command(name="assign_team", description="Assign a user to a team (admin only)")
-    @app_commands.describe(team="Team abbreviation, e.g. OSU", user="The user to assign")
+    @app_commands.describe(team="Team name or abbreviation, e.g. Georgia or UGA", user="The user to assign")
     async def assign_team(self, interaction: discord.Interaction, team: str, user: discord.Member):
         if not is_admin(interaction):
             await interaction.response.send_message("Only admins can assign teams.", ephemeral=True)
             return
 
-        abbr = team.upper()
-        if abbr not in self.teams:
-            await interaction.response.send_message(
-                f"Couldn't find a team with abbreviation `{abbr}`. Double check the spelling.",
-                ephemeral=True,
-            )
+        abbr, error = resolve_team(team, self.teams)
+        if error:
+            await interaction.response.send_message(error, ephemeral=True)
             return
 
         roster = load_roster()
@@ -119,18 +141,15 @@ class Roster(commands.Cog):
         await self.refresh_roster_channel()
 
     @app_commands.command(name="vacate_team", description="Remove a team's current owner (admin only)")
-    @app_commands.describe(team="Team abbreviation, e.g. OSU")
+    @app_commands.describe(team="Team name or abbreviation, e.g. Georgia or UGA")
     async def vacate_team(self, interaction: discord.Interaction, team: str):
         if not is_admin(interaction):
             await interaction.response.send_message("Only admins can vacate teams.", ephemeral=True)
             return
 
-        abbr = team.upper()
-        if abbr not in self.teams:
-            await interaction.response.send_message(
-                f"Couldn't find a team with abbreviation `{abbr}`. Double check the spelling.",
-                ephemeral=True,
-            )
+        abbr, error = resolve_team(team, self.teams)
+        if error:
+            await interaction.response.send_message(error, ephemeral=True)
             return
 
         roster = load_roster()
@@ -148,6 +167,22 @@ class Roster(commands.Cog):
             f"Vacated **{team_info['name']}** (was assigned to <@{previous_owner_id}>).", ephemeral=True
         )
         await self.refresh_roster_channel()
+
+    async def team_name_autocomplete(self, interaction: discord.Interaction, current: str):
+        current_lower = current.lower()
+        matches = [
+            t for abbr, t in self.teams.items()
+            if current_lower in t["name"].lower() or current_lower in abbr.lower()
+        ]
+        return [app_commands.Choice(name=t["name"], value=t["abbr"]) for t in matches[:25]]
+
+    @assign_team.autocomplete("team")
+    async def assign_team_autocomplete(self, interaction: discord.Interaction, current: str):
+        return await self.team_name_autocomplete(interaction, current)
+
+    @vacate_team.autocomplete("team")
+    async def vacate_team_autocomplete(self, interaction: discord.Interaction, current: str):
+        return await self.team_name_autocomplete(interaction, current)
 
     @app_commands.command(name="vacate_all", description="Remove every team's owner, clearing the whole roster (admin only)")
     async def vacate_all(self, interaction: discord.Interaction):
