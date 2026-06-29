@@ -61,6 +61,19 @@ class Scheduling(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
+    @app_commands.command(name="dynasty_info", description="Show the current dynasty year and season status")
+    async def dynasty_info(self, interaction: discord.Interaction):
+        season = load_season()
+        year = season.get("year") or "Not set yet"
+        phase = season.get("current_phase", "preseason").replace("_", " ").title()
+        current_week = season.get("current_week")
+        week_text = f"Week {current_week}" if current_week is not None else "No active week"
+
+        await interaction.response.send_message(
+            f"**Dynasty Year:** {year}\n**Phase:** {phase}\n**{week_text}**",
+            ephemeral=True,
+        )
+
     @app_commands.command(name="new_dynasty", description="Start a fresh dynasty for a new year (admin only)")
     @app_commands.describe(year="The new dynasty year, e.g. 2027")
     async def new_dynasty(self, interaction: discord.Interaction, year: int):
