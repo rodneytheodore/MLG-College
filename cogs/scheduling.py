@@ -111,22 +111,39 @@ class NewDynastyConfirmView(discord.ui.View):
 
     @discord.ui.button(label="Confirm — Start New Dynasty", style=discord.ButtonStyle.danger)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        print("[DEBUG] new_dynasty confirm() button handler started")
+
         if not is_admin(interaction):
+            print("[DEBUG] is_admin check failed, aborting")
             await send_ephemeral(interaction, "Only admins can confirm this.")
             return
 
+        print("[DEBUG] is_admin check passed")
+
         current_season = load_season()
         current_roster = load_roster()
+        print(f"[DEBUG] loaded current_season={current_season}, current_roster keys={list(current_roster.keys())}")
 
         archive_dynasty(current_season, current_roster)
+        print("[DEBUG] archive_dynasty() completed")
 
         save_roster({})
-        save_season({
+        print("[DEBUG] save_roster({}) completed")
+
+        new_season_data = {
             "year": self.new_year,
             "current_stage": "preseason",
             "current_week": None,
             "weeks": {},
-        })
+        }
+        print(f"[DEBUG] about to save_season() with: {new_season_data}")
+        save_season(new_season_data)
+        print("[DEBUG] save_season() call returned with no exception")
+
+        from utils.data import SEASON_PATH
+        import os
+        print(f"[DEBUG] SEASON_PATH resolves to: {SEASON_PATH}")
+        print(f"[DEBUG] os.path.exists(SEASON_PATH) right after save: {os.path.exists(SEASON_PATH)}")
 
         roster_cog = interaction.client.get_cog("Roster")
         if roster_cog is not None:
