@@ -6,6 +6,7 @@ DATA_DIR = os.environ.get("DATA_DIR", ".")
 ROSTER_PATH = os.path.join(DATA_DIR, "roster.json")
 SETTINGS_PATH = os.path.join(DATA_DIR, "settings.json")
 SEASON_PATH = os.path.join(DATA_DIR, "season.json")
+SCHEME_CARDS_PATH = os.path.join(DATA_DIR, "scheme_cards.json")
 TEAMS_PATH = "fbs_teams_full.json"  # bundled in repo, not the volume
 
 ADMIN_ROLE_NAME = "Admin"
@@ -83,6 +84,27 @@ def archive_dynasty(season: dict, roster: dict):
         json.dump(season, f, indent=2)
     with open(os.path.join(folder, f"roster_{year_label}.json"), "w") as f:
         json.dump(roster, f, indent=2)
+
+
+def load_scheme_cards() -> dict:
+    if not os.path.exists(SCHEME_CARDS_PATH):
+        return {}
+    with open(SCHEME_CARDS_PATH, "r") as f:
+        return json.load(f)
+
+
+def save_scheme_cards(cards: dict):
+    folder = os.path.dirname(SCHEME_CARDS_PATH)
+    if folder:
+        os.makedirs(folder, exist_ok=True)
+    with open(SCHEME_CARDS_PATH, "w") as f:
+        json.dump(cards, f, indent=2)
+
+
+def true_display_name(user: discord.abc.User) -> str:
+    """Returns the account-level display name (global_name), falling back to
+    username, ignoring any server-specific nickname."""
+    return getattr(user, "global_name", None) or user.name
 
 
 def is_admin(interaction: discord.Interaction) -> bool:
