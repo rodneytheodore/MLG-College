@@ -11,6 +11,8 @@ COGS = [
     "cogs.scheduling",
 ]
 
+GUILD_ID = 1207738346424770631  # your server's ID, for instant command sync
+
 
 class MLGBot(commands.Bot):
     def __init__(self):
@@ -20,7 +22,11 @@ class MLGBot(commands.Bot):
         for cog in COGS:
             await self.load_extension(cog)
             print(f"Loaded cog: {cog}")
-        await self.tree.sync()
+
+        guild = discord.Object(id=GUILD_ID)
+        self.tree.copy_global_to(guild=guild)
+        synced = await self.tree.sync(guild=guild)
+        print(f"Synced {len(synced)} command(s) to guild {GUILD_ID}")
 
 
 bot = MLGBot()
