@@ -9,6 +9,7 @@ intents.message_content = True
 COGS = [
     "cogs.roster",
     "cogs.scheduling",
+    "cogs.scheme_cards",
 ]
 
 GUILD_ID = 1207738346424770631  # your server's ID, for instant command sync
