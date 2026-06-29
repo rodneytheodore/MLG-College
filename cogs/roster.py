@@ -13,6 +13,7 @@ from utils.data import (
     resolve_team,
 )
 from utils.responses import send_ephemeral
+from cogs.scheduling import refresh_dashboard
 
 
 class Roster(commands.Cog):
@@ -112,6 +113,7 @@ class Roster(commands.Cog):
         team_info = self.teams[abbr]
         await send_ephemeral(interaction, f"Assigned **{team_info['name']}** to {user.mention}.")
         await self.refresh_roster_channel()
+        await refresh_dashboard(self.bot)
 
     @app_commands.command(name="vacate_team", description="Remove a team's current owner (admin only)")
     @app_commands.describe(team="Team name or abbreviation, e.g. Georgia or UGA")
@@ -140,6 +142,7 @@ class Roster(commands.Cog):
             interaction, f"Vacated **{team_info['name']}** (was assigned to <@{previous_owner_id}>)."
         )
         await self.refresh_roster_channel()
+        await refresh_dashboard(self.bot)
 
     async def team_name_autocomplete(self, interaction: discord.Interaction, current: str):
         current_lower = current.lower()
@@ -169,6 +172,7 @@ class Roster(commands.Cog):
 
         await send_ephemeral(interaction, f"Vacated all {count} claimed team(s). Roster is now empty.")
         await self.refresh_roster_channel()
+        await refresh_dashboard(self.bot)
 
 
 async def setup(bot: commands.Bot):
