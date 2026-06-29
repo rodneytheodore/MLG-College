@@ -59,7 +59,7 @@ def save_roster(roster: dict):
 
 def load_season() -> dict:
     if not os.path.exists(SEASON_PATH):
-        return {"year": None, "current_phase": "preseason", "current_week": None, "weeks": {}}
+        return {"year": None, "current_stage": "preseason", "current_week": None, "weeks": {}}
     with open(SEASON_PATH, "r") as f:
         return json.load(f)
 

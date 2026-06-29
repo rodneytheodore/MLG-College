@@ -31,7 +31,7 @@ class NewDynastyConfirmView(discord.ui.View):
         save_roster({})
         save_season({
             "year": self.new_year,
-            "current_phase": "preseason",
+            "current_stage": "preseason",
             "current_week": None,
             "weeks": {},
         })
@@ -65,12 +65,12 @@ class Scheduling(commands.Cog):
     async def dynasty_info(self, interaction: discord.Interaction):
         season = load_season()
         year = season.get("year") or "Not set yet"
-        phase = season.get("current_phase", "preseason").replace("_", " ").title()
+        stage = season.get("current_stage", "preseason").replace("_", " ").title()
         current_week = season.get("current_week")
         week_text = f"Week {current_week}" if current_week is not None else "No active week"
 
         await interaction.response.send_message(
-            f"**Dynasty Year:** {year}\n**Phase:** {phase}\n**{week_text}**",
+            f"**Dynasty Year:** {year}\n**Stage:** {stage}\n**{week_text}**",
             ephemeral=True,
         )
 
