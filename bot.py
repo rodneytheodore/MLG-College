@@ -23,15 +23,18 @@ class MLGBot(commands.Bot):
             await self.load_extension(cog)
             print(f"Loaded cog: {cog}")
 
-        # Clear any old global command registration so it doesn't show up
-        # duplicated alongside the guild-specific one below.
-        self.tree.clear_commands(guild=None)
-        await self.tree.sync()
-
         guild = discord.Object(id=GUILD_ID)
+
+        # Copy the currently-registered global commands into the guild bucket
+        # FIRST, while they still exist, then sync that to Discord (fast, near-instant).
         self.tree.copy_global_to(guild=guild)
         synced = await self.tree.sync(guild=guild)
         print(f"Synced {len(synced)} command(s) to guild {GUILD_ID}")
+
+        # Now clear the global registration so it doesn't show up duplicated
+        # alongside the guild-specific one.
+        self.tree.clear_commands(guild=None)
+        await self.tree.sync()
 
 
 bot = MLGBot()
