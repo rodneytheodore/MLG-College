@@ -13,6 +13,46 @@ from utils.data import (
 from utils.responses import send_ephemeral
 
 
+class AdvanceSeasonConfirmView(discord.ui.View):
+    def __init__(self, new_year: int):
+        super().__init__(timeout=60)
+        self.new_year = new_year
+
+    @discord.ui.button(label="Confirm — Advance Season", style=discord.ButtonStyle.danger)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not is_admin(interaction):
+            await send_ephemeral(interaction, "Only admins can confirm this.")
+            return
+
+        current_season = load_season()
+        current_roster = load_roster()
+
+        # Archive the just-finished season's data (rosters carry over, so this
+        # is just a record of that year's final games/state, not a reset of teams).
+        archive_dynasty(current_season, current_roster)
+
+        save_season({
+            "year": self.new_year,
+            "current_stage": "preseason",
+            "current_week": None,
+            "weeks": {},
+        })
+
+        for child in self.children:
+            child.disabled = True
+        await interaction.response.edit_message(
+            content=f"✅ Advanced to **{self.new_year}**. Previous season archived. "
+            f"Stage reset to Preseason. Team assignments were left untouched.",
+            view=self,
+        )
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        for child in self.children:
+            child.disabled = True
+        await interaction.response.edit_message(content="Cancelled. Nothing was changed.", view=self)
+
+
 class NewDynastyConfirmView(discord.ui.View):
     def __init__(self, new_year: int):
         super().__init__(timeout=60)
@@ -73,6 +113,32 @@ class Scheduling(commands.Cog):
         week_text = f"Week {current_week}" if current_week is not None else "No active week"
 
         await send_ephemeral(interaction, f"**Dynasty Year:** {year}\n**Stage:** {stage}\n**{week_text}**")
+
+    @app_commands.command(name="advance_season", description="Move to the next year, reset to Preseason (admin only)")
+    async def advance_season(self, interaction: discord.Interaction):
+        if not is_admin(interaction):
+            await send_ephemeral(interaction, "Only admins can advance the season.")
+            return
+
+        season = load_season()
+        current_year = season.get("year")
+
+        if current_year is None:
+            await send_ephemeral(
+                interaction, "No dynasty year is set yet. Run `/new_dynasty` first to start one."
+            )
+            return
+
+        new_year = current_year + 1
+        view = AdvanceSeasonConfirmView(new_year=new_year)
+        await send_ephemeral(
+            interaction,
+            f"This will archive **{current_year}**'s season data and advance to **{new_year}**:\n"
+            f"- Stage resets to Preseason, no active week\n"
+            f"- Team assignments are **kept** \u2014 owners stay with their teams\n\n"
+            f"Are you sure?",
+            view=view,
+        )
 
     @app_commands.command(name="new_dynasty", description="Start a fresh dynasty for a new year (admin only)")
     @app_commands.describe(year="The new dynasty year, e.g. 2027")
