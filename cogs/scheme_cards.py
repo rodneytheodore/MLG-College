@@ -43,7 +43,7 @@ def build_scheme_card_embed(team_info: dict, card: dict) -> discord.Embed:
 
         lines = [f"**Scheme:** {offense['scheme']}  \u2022  **Coaching Tree:** {offense['coaching_tree']}"]
         lines.append(f"**Personnel:** {offense['personnel']}  \u2022  **Tempo:** {offense['tempo']}")
-        lines.append(f"*\u201c{offense['summary']}\u201d*")
+        lines.append(f"**Summary:** {offense['summary']}")
         embed.add_field(name="OFFENSE", value="\n".join(lines), inline=False)
 
     defense = card.get("defense")
@@ -51,7 +51,7 @@ def build_scheme_card_embed(team_info: dict, card: dict) -> discord.Embed:
         lines = [f"**Scheme:** {defense['scheme']}  \u2022  **Coaching Tree:** {defense['coaching_tree']}"]
         lines.append(f"**Shell:** {defense['coverage_shell']}  \u2022  **Coverage:** {defense['coverage_type']}")
         lines.append(f"**Pressure:** {defense['pressure']}")
-        lines.append(f"*\u201c{defense['summary']}\u201d*")
+        lines.append(f"**Summary:** {defense['summary']}")
         embed.add_field(name="DEFENSE", value="\n".join(lines), inline=False)
 
     return embed
@@ -94,28 +94,15 @@ class SchemeCards(commands.Cog):
             embed = build_scheme_card_embed(self.teams[abbr], card)
             await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
 
-    def resolve_team_for_user(self, interaction: discord.Interaction, team_input: str, roster: dict):
-        """Resolves which team abbreviation a set_*_scheme command should act on.
-        If team_input is given, resolves it and checks the caller can edit it
-        (owns it, or is admin). If omitted, auto-detects from roster ownership,
-        requiring the caller to own exactly one team. Returns (abbr, error)."""
-        if team_input:
-            abbr, error = resolve_team(team_input, self.teams)
-            if error:
-                return None, error
-            if not can_edit_card(interaction, abbr, roster):
-                return None, "You can only set the scheme card for a team you own (or be an admin)."
-            return abbr, None
-
+    def resolve_owned_team(self, interaction: discord.Interaction, roster: dict):
+        """Auto-detects the team owned by the submitting user.
+        Returns (abbr, error). Admins must own a team too — no team override."""
         owned = [a for a, info in roster.items() if info.get("user_id") == interaction.user.id]
         if len(owned) == 0:
-            return None, (
-                "You don't own a team yet, so I can't auto-detect which one to use. "
-                "If you're an admin setting this for someone else, specify the `team` option."
-            )
+            return None, "You haven't been assigned a team yet. Contact an admin to get one assigned."
         if len(owned) > 1:
             names = ", ".join(self.teams[a]["name"] for a in owned)
-            return None, f"You own multiple teams ({names}) \u2014 please specify which one with the `team` option."
+            return None, f"You own multiple teams ({names}) — contact an admin to sort this out."
         return owned[0], None
 
     # ---------- Commands ----------
@@ -128,7 +115,6 @@ class SchemeCards(commands.Cog):
         tempo="Tempo/philosophy",
         summary="Short summary of your offensive approach",
         film="Stream link (Twitch, YouTube, etc.)",
-        team="Your team (auto-detected if you own one \u2014 only specify to set it for someone else as admin)",
     )
     @app_commands.choices(personnel=[
         app_commands.Choice(name="Traditional (Base 21/12 Personnel)", value="Traditional"),
@@ -142,10 +128,10 @@ class SchemeCards(commands.Cog):
         personnel: str,
         tempo: Literal["Ball Control", "No Huddle", "Turbo"],
         summary: str,
-        film: str, team: str = None,
+        film: str,
     ):
         roster = load_roster()
-        abbr, error = self.resolve_team_for_user(interaction, team, roster)
+        abbr, error = self.resolve_owned_team(interaction, roster)
         if error:
             await send_ephemeral(interaction, error)
             return
@@ -169,10 +155,6 @@ class SchemeCards(commands.Cog):
         await send_ephemeral(interaction, f"Offense scheme saved for **{self.teams[abbr]['name']}**.")
         await self.refresh_scheme_cards_channel()
 
-    @set_offense_scheme.autocomplete("team")
-    async def set_offense_scheme_team_autocomplete(self, interaction: discord.Interaction, current: str):
-        return await self.team_autocomplete(interaction, current)
-
     @app_commands.command(name="set_defense_scheme", description="Set your team's defensive scheme card")
     @app_commands.describe(
         scheme="Defensive scheme",
@@ -181,7 +163,6 @@ class SchemeCards(commands.Cog):
         coverage_type="Coverage type",
         pressure="Pressure package/approach",
         summary="Short summary of your defensive approach",
-        team="Your team (auto-detected if you own one \u2014 only specify to set it for someone else as admin)",
     )
     @app_commands.choices(coverage_type=[
         app_commands.Choice(name="Man (C2 Man, C1, C0, Man Blitz)", value="Man Coverage"),
@@ -196,10 +177,9 @@ class SchemeCards(commands.Cog):
         coverage_type: str,
         pressure: Literal["Bring Pressure/Blitz", "Rush Four/Play Coverage"],
         summary: str,
-        team: str = None,
     ):
         roster = load_roster()
-        abbr, error = self.resolve_team_for_user(interaction, team, roster)
+        abbr, error = self.resolve_owned_team(interaction, roster)
         if error:
             await send_ephemeral(interaction, error)
             return
@@ -219,10 +199,6 @@ class SchemeCards(commands.Cog):
 
         await send_ephemeral(interaction, f"Defense scheme saved for **{self.teams[abbr]['name']}**.")
         await self.refresh_scheme_cards_channel()
-
-    @set_defense_scheme.autocomplete("team")
-    async def set_defense_scheme_team_autocomplete(self, interaction: discord.Interaction, current: str):
-        return await self.team_autocomplete(interaction, current)
 
     @app_commands.command(name="post_scheme_cards", description="Set this channel as the live scheme cards display (admin only)")
     async def post_scheme_cards(self, interaction: discord.Interaction):
