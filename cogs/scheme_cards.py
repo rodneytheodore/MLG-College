@@ -122,7 +122,6 @@ class SchemeCards(commands.Cog):
 
     @app_commands.command(name="set_offense_scheme", description="Set your team's offensive scheme card")
     @app_commands.describe(
-        coach="Coach name/gamertag",
         scheme="Offensive scheme",
         coaching_tree="Coaching Tree (1 or 2 coaches)",
         personnel="Personnel grouping",
@@ -138,7 +137,6 @@ class SchemeCards(commands.Cog):
     ])
     async def set_offense_scheme(
         self, interaction: discord.Interaction,
-        coach: str,
         scheme: Literal["Air Raid", "Spread", "Spread Option", "Option", "Pro Style", "Power Spread", "Pistol", "Multiple"],
         coaching_tree: str,
         personnel: str,
@@ -151,6 +149,8 @@ class SchemeCards(commands.Cog):
         if error:
             await send_ephemeral(interaction, error)
             return
+
+        coach = true_display_name(interaction.user)
 
         cards = load_scheme_cards()
         card = cards.setdefault(abbr, {})
