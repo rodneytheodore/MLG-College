@@ -174,6 +174,23 @@ class Scheduling(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
+    @app_commands.command(name="debug_data", description="TEMPORARY: list what the bot's own process sees in /data")
+    async def debug_data(self, interaction: discord.Interaction):
+        import os
+        from utils.data import DATA_DIR
+        try:
+            contents = os.listdir(DATA_DIR)
+        except Exception as e:
+            contents = [f"ERROR listing DATA_DIR: {e}"]
+
+        season_exists = os.path.exists(os.path.join(DATA_DIR, "season.json"))
+        await send_ephemeral(
+            interaction,
+            f"DATA_DIR = `{DATA_DIR}`\n"
+            f"Contents: `{contents}`\n"
+            f"season.json exists (from bot's own process): `{season_exists}`",
+        )
+
     @app_commands.command(name="post_dashboard", description="Set this channel as the live league status dashboard (admin only)")
     async def post_dashboard(self, interaction: discord.Interaction):
         if not is_admin(interaction):
