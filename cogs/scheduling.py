@@ -10,6 +10,7 @@ from utils.data import (
     archive_dynasty,
     is_admin,
 )
+from utils.responses import send_ephemeral
 
 
 class NewDynastyConfirmView(discord.ui.View):
@@ -20,7 +21,7 @@ class NewDynastyConfirmView(discord.ui.View):
     @discord.ui.button(label="Confirm — Start New Dynasty", style=discord.ButtonStyle.danger)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not is_admin(interaction):
-            await interaction.response.send_message("Only admins can confirm this.", ephemeral=True)
+            await send_ephemeral(interaction, "Only admins can confirm this.")
             return
 
         current_season = load_season()
@@ -42,6 +43,8 @@ class NewDynastyConfirmView(discord.ui.View):
 
         for child in self.children:
             child.disabled = True
+        # Editing the existing ephemeral message in place; the auto-clear timer
+        # from when this message was first sent (in /new_dynasty) still applies.
         await interaction.response.edit_message(
             content=f"✅ New dynasty started for **{self.new_year}**. Previous year archived. "
             f"Roster cleared, season reset to Preseason.",
@@ -69,16 +72,13 @@ class Scheduling(commands.Cog):
         current_week = season.get("current_week")
         week_text = f"Week {current_week}" if current_week is not None else "No active week"
 
-        await interaction.response.send_message(
-            f"**Dynasty Year:** {year}\n**Stage:** {stage}\n**{week_text}**",
-            ephemeral=True,
-        )
+        await send_ephemeral(interaction, f"**Dynasty Year:** {year}\n**Stage:** {stage}\n**{week_text}**")
 
     @app_commands.command(name="new_dynasty", description="Start a fresh dynasty for a new year (admin only)")
     @app_commands.describe(year="The new dynasty year, e.g. 2027")
     async def new_dynasty(self, interaction: discord.Interaction, year: int):
         if not is_admin(interaction):
-            await interaction.response.send_message("Only admins can start a new dynasty.", ephemeral=True)
+            await send_ephemeral(interaction, "Only admins can start a new dynasty.")
             return
 
         current_season = load_season()
@@ -86,7 +86,8 @@ class Scheduling(commands.Cog):
         claimed_count = len(load_roster())
 
         view = NewDynastyConfirmView(new_year=year)
-        await interaction.response.send_message(
+        await send_ephemeral(
+            interaction,
             f"⚠️ This will archive the current dynasty (year: `{current_year}`, "
             f"{claimed_count} team(s) claimed) and reset everything for **{year}**:\n"
             f"- All team assignments will be cleared\n"
@@ -94,7 +95,6 @@ class Scheduling(commands.Cog):
             f"- Previous weeks' Discord channels/categories are **not** deleted automatically\n\n"
             f"Are you sure?",
             view=view,
-            ephemeral=True,
         )
 
 

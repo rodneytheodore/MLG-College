@@ -12,6 +12,7 @@ from utils.data import (
     is_admin,
     resolve_team,
 )
+from utils.responses import send_ephemeral
 
 
 class Roster(commands.Cog):
@@ -72,38 +73,36 @@ class Roster(commands.Cog):
     @app_commands.command(name="post_roster", description="Set this channel as the live roster display (admin only)")
     async def post_roster(self, interaction: discord.Interaction):
         if not is_admin(interaction):
-            await interaction.response.send_message("Only admins can do that.", ephemeral=True)
+            await send_ephemeral(interaction, "Only admins can do that.")
             return
 
         settings = load_settings()
         settings["roster_channel_id"] = interaction.channel_id
         save_settings(settings)
 
-        await interaction.response.send_message(
-            "This channel is now the live roster display. Building it now...", ephemeral=True
-        )
+        await send_ephemeral(interaction, "This channel is now the live roster display. Building it now...")
         await self.refresh_roster_channel()
 
     @app_commands.command(name="assign_team", description="Assign a user to a team (admin only)")
     @app_commands.describe(team="Team name or abbreviation, e.g. Georgia or UGA", user="The user to assign")
     async def assign_team(self, interaction: discord.Interaction, team: str, user: discord.Member):
         if not is_admin(interaction):
-            await interaction.response.send_message("Only admins can assign teams.", ephemeral=True)
+            await send_ephemeral(interaction, "Only admins can assign teams.")
             return
 
         abbr, error = resolve_team(team, self.teams)
         if error:
-            await interaction.response.send_message(error, ephemeral=True)
+            await send_ephemeral(interaction, error)
             return
 
         roster = load_roster()
 
         if abbr in roster:
             current_owner_id = roster[abbr]["user_id"]
-            await interaction.response.send_message(
+            await send_ephemeral(
+                interaction,
                 f"`{abbr}` is already assigned to <@{current_owner_id}>. "
                 f"Use `/vacate_team` first if you want to reassign it.",
-                ephemeral=True,
             )
             return
 
@@ -111,27 +110,25 @@ class Roster(commands.Cog):
         save_roster(roster)
 
         team_info = self.teams[abbr]
-        await interaction.response.send_message(
-            f"Assigned **{team_info['name']}** to {user.mention}.", ephemeral=True
-        )
+        await send_ephemeral(interaction, f"Assigned **{team_info['name']}** to {user.mention}.")
         await self.refresh_roster_channel()
 
     @app_commands.command(name="vacate_team", description="Remove a team's current owner (admin only)")
     @app_commands.describe(team="Team name or abbreviation, e.g. Georgia or UGA")
     async def vacate_team(self, interaction: discord.Interaction, team: str):
         if not is_admin(interaction):
-            await interaction.response.send_message("Only admins can vacate teams.", ephemeral=True)
+            await send_ephemeral(interaction, "Only admins can vacate teams.")
             return
 
         abbr, error = resolve_team(team, self.teams)
         if error:
-            await interaction.response.send_message(error, ephemeral=True)
+            await send_ephemeral(interaction, error)
             return
 
         roster = load_roster()
 
         if abbr not in roster:
-            await interaction.response.send_message(f"`{abbr}` doesn't currently have an owner.", ephemeral=True)
+            await send_ephemeral(interaction, f"`{abbr}` doesn't currently have an owner.")
             return
 
         previous_owner_id = roster[abbr]["user_id"]
@@ -139,8 +136,8 @@ class Roster(commands.Cog):
         save_roster(roster)
 
         team_info = self.teams[abbr]
-        await interaction.response.send_message(
-            f"Vacated **{team_info['name']}** (was assigned to <@{previous_owner_id}>).", ephemeral=True
+        await send_ephemeral(
+            interaction, f"Vacated **{team_info['name']}** (was assigned to <@{previous_owner_id}>)."
         )
         await self.refresh_roster_channel()
 
@@ -163,16 +160,14 @@ class Roster(commands.Cog):
     @app_commands.command(name="vacate_all", description="Remove every team's owner, clearing the whole roster (admin only)")
     async def vacate_all(self, interaction: discord.Interaction):
         if not is_admin(interaction):
-            await interaction.response.send_message("Only admins can do that.", ephemeral=True)
+            await send_ephemeral(interaction, "Only admins can do that.")
             return
 
         roster = load_roster()
         count = len(roster)
         save_roster({})
 
-        await interaction.response.send_message(
-            f"Vacated all {count} claimed team(s). Roster is now empty.", ephemeral=True
-        )
+        await send_ephemeral(interaction, f"Vacated all {count} claimed team(s). Roster is now empty.")
         await self.refresh_roster_channel()
 
 
