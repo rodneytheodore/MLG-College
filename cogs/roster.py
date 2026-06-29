@@ -9,41 +9,9 @@ from utils.data import (
     save_roster,
     load_settings,
     save_settings,
+    is_admin,
+    resolve_team,
 )
-
-
-ADMIN_ROLE_NAME = "Admin"
-
-
-def is_admin(interaction: discord.Interaction) -> bool:
-    if interaction.user.guild_permissions.administrator:
-        return True
-    return any(role.name == ADMIN_ROLE_NAME for role in interaction.user.roles)
-
-
-def resolve_team(query: str, teams: dict):
-    """Resolve user input to a team abbreviation.
-    Tries exact abbreviation match first, then exact name match,
-    then a unique partial name match. Returns (abbr, error_message)."""
-    query = query.strip()
-    upper = query.upper()
-
-    if upper in teams:
-        return upper, None
-
-    lower = query.lower()
-    exact_name_matches = [abbr for abbr, t in teams.items() if t["name"].lower() == lower]
-    if len(exact_name_matches) == 1:
-        return exact_name_matches[0], None
-
-    partial_matches = [abbr for abbr, t in teams.items() if lower in t["name"].lower()]
-    if len(partial_matches) == 1:
-        return partial_matches[0], None
-    if len(partial_matches) > 1:
-        names = ", ".join(teams[a]["name"] for a in partial_matches[:8])
-        return None, f"That matches multiple teams: {names}. Try being more specific or use the abbreviation."
-
-    return None, f"Couldn't find a team matching `{query}`. Try the team name or abbreviation, e.g. `UGA`."
 
 
 class Roster(commands.Cog):
@@ -88,8 +56,9 @@ class Roster(commands.Cog):
                     description=f"`{padded_name}`\n<@{owner_id}>",
                     color=int(team["color"], 16) if team.get("color") else discord.Color.default(),
                 )
-                if team.get("logo"):
-                    embed.set_thumbnail(url=team["logo"])
+                logo_url = team.get("logoDark") or team.get("logo")
+                if logo_url:
+                    embed.set_thumbnail(url=logo_url)
                 await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
 
         claimed_count = len(roster)

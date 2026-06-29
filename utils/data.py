@@ -1,10 +1,14 @@
 import os
 import json
+import discord
 
 DATA_DIR = os.environ.get("DATA_DIR", ".")
 ROSTER_PATH = os.path.join(DATA_DIR, "roster.json")
 SETTINGS_PATH = os.path.join(DATA_DIR, "settings.json")
+SEASON_PATH = os.path.join(DATA_DIR, "season.json")
 TEAMS_PATH = "fbs_teams_full.json"  # bundled in repo, not the volume
+
+ADMIN_ROLE_NAME = "Admin"
 
 
 def load_teams_by_conference() -> dict:
@@ -51,3 +55,62 @@ def save_roster(roster: dict):
         os.makedirs(folder, exist_ok=True)
     with open(ROSTER_PATH, "w") as f:
         json.dump(roster, f, indent=2)
+
+
+def load_season() -> dict:
+    if not os.path.exists(SEASON_PATH):
+        return {"year": None, "current_phase": "preseason", "current_week": None, "weeks": {}}
+    with open(SEASON_PATH, "r") as f:
+        return json.load(f)
+
+
+def save_season(season: dict):
+    folder = os.path.dirname(SEASON_PATH)
+    if folder:
+        os.makedirs(folder, exist_ok=True)
+    with open(SEASON_PATH, "w") as f:
+        json.dump(season, f, indent=2)
+
+
+def archive_dynasty(season: dict, roster: dict):
+    """Saves a snapshot of the current season + roster before a reset,
+    tagged with whatever year was stored on the season (or 'unknown')."""
+    year_label = season.get("year") or "unknown"
+    folder = os.path.join(DATA_DIR, "archive")
+    os.makedirs(folder, exist_ok=True)
+
+    with open(os.path.join(folder, f"season_{year_label}.json"), "w") as f:
+        json.dump(season, f, indent=2)
+    with open(os.path.join(folder, f"roster_{year_label}.json"), "w") as f:
+        json.dump(roster, f, indent=2)
+
+
+def is_admin(interaction: discord.Interaction) -> bool:
+    if interaction.user.guild_permissions.administrator:
+        return True
+    return any(role.name == ADMIN_ROLE_NAME for role in interaction.user.roles)
+
+
+def resolve_team(query: str, teams: dict):
+    """Resolve user input to a team abbreviation.
+    Tries exact abbreviation match first, then exact name match,
+    then a unique partial name match. Returns (abbr, error_message)."""
+    query = query.strip()
+    upper = query.upper()
+
+    if upper in teams:
+        return upper, None
+
+    lower = query.lower()
+    exact_name_matches = [abbr for abbr, t in teams.items() if t["name"].lower() == lower]
+    if len(exact_name_matches) == 1:
+        return exact_name_matches[0], None
+
+    partial_matches = [abbr for abbr, t in teams.items() if lower in t["name"].lower()]
+    if len(partial_matches) == 1:
+        return partial_matches[0], None
+    if len(partial_matches) > 1:
+        names = ", ".join(teams[a]["name"] for a in partial_matches[:8])
+        return None, f"That matches multiple teams: {names}. Try being more specific or use the abbreviation."
+
+    return None, f"Couldn't find a team matching `{query}`. Try the team name or abbreviation, e.g. `UGA`."
