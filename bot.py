@@ -8,6 +8,7 @@ intents.message_content = True
 # Add the filenames (without .py) of any cogs in the cogs/ folder here
 COGS = [
     "cogs.roster",
+    "cogs.scheduling",
 ]
 
 
