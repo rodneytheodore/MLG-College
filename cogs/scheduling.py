@@ -753,17 +753,18 @@ async def _do_advance_week(
 
     if user_games:
         for g in user_games:
-            embed, file = await cog.build_game_embed(g, week, roster, deadline=deadline, mention_users=False)
-            view = CompleteGameView(cog=cog, game_id=g["game_id"], show_schedule_button=True)
-            send_kwargs = {"embed": embed, "view": view, "allowed_mentions": discord.AllowedMentions.none()}
-            if file is not None:
-                send_kwargs["file"] = file
-            game_msg = await user_channel.send(**send_kwargs)
+            # Channel embed: no image, no buttons (clean matchup card only)
+            embed, _ = await cog.build_game_embed(g, week, roster, deadline=deadline, mention_users=False, include_image=False)
+            game_msg = await user_channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
             thread = await game_msg.create_thread(name=f"{g['home']} vs {g['away']} — Week {week}")
             home_owner_id = roster.get(g["home"], {}).get("user_id")
             away_owner_id = roster.get(g["away"], {}).get("user_id")
+
+            # Buttons live in the thread alongside the ping
+            game_view = CompleteGameView(cog=cog, game_id=g["game_id"], show_schedule_button=True)
             await thread.send(
                 f"<@{home_owner_id}> <@{away_owner_id}> use this thread to schedule your game and report completion.{deadline_line}",
+                view=game_view,
                 allowed_mentions=discord.AllowedMentions(users=True),
             )
 
@@ -1184,7 +1185,7 @@ class Scheduling(commands.Cog):
         embed = discord.Embed(
             title=f"{home['name']} vs {away['name']}",
             description=description,
-            color=int(home["color"], 16) if home.get("color") else discord.Color.default(),
+            color=0xFFD700 if game["type"] == "user" else (int(home["color"], 16) if home.get("color") else discord.Color.default()),
         )
 
         home_logo = home.get("logoDark") or home.get("logo")
