@@ -123,14 +123,14 @@ def build_scheme_card_embed(team_info: dict, card: dict) -> discord.Embed:
         embed.description = header_line
 
         lines = [f"**Scheme:** {offense['scheme']}  \u2022  **Coaching Tree:** {offense['coaching_tree']}"]
-        lines.append(f"**Personnel:** {offense['personnel']}")
-        lines.append(f"**Core Run Concepts:** {offense['core_run_concepts']}")
-        lines.append(f"**Quick Game:** {offense['pass_quick_game']}")
-        lines.append(f"**Intermediate:** {offense['pass_intermediate']}")
-        lines.append(f"**Deep:** {offense['pass_deep']}")
-        lines.append(f"**Tempo:** {offense['tempo']}")
-        lines.append(f"**Run/Pass Tendency:** {offense['run_pass']}")
         lines.append(f"**Playbook Type:** {offense['playbook_type']}  \u2022  **Base Playbook:** {offense['base_playbook']}")
+        lines.append(f"**Personnel:** {offense['personnel']}")
+        lines.append(f"**Tendency:** {offense['run_pass']}")
+        lines.append(f"**Core Run Concepts:** {offense['core_run_concepts']}")
+        lines.append(f"**Quick Pass:** {offense['pass_quick_game']}")
+        lines.append(f"**Intermediate Pass:** {offense['pass_intermediate']}")
+        lines.append(f"**Deep Pass:** {offense['pass_deep']}")
+        lines.append(f"**Tempo:** {offense['tempo']}")
         lines.append(f"**Summary:** {offense['summary']}")
         embed.add_field(name="OFFENSE", value="\n".join(lines), inline=False)
 
