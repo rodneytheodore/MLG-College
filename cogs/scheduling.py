@@ -300,12 +300,15 @@ def build_deadline_strings(
     now = now_eastern()
     user_date = now + timedelta(days=day_offset)
     cpu_date = user_date - timedelta(days=1)
-    tz_label = "EDT" if now.dst().seconds > 0 else "EST"
 
     def fmt(dt: datetime) -> str:
         base = dt.strftime("%A, %B %d")
         if hour_str and minute_str:
-            return f"{base} at {hour_str}{minute_str} {tz_label}"
+            # hour_str is e.g. "10 PM", minute_str is e.g. ":30"
+            hour_num, ampm = hour_str.split()
+            minute_num = minute_str.lstrip(":")
+            tz_label = "EDT" if now.dst().seconds > 0 else "EST"
+            return f"{base} at {hour_num}:{minute_num} {ampm} {tz_label}"
         return base
 
     return fmt(user_date), fmt(cpu_date)
@@ -750,7 +753,7 @@ async def _do_advance_week(
 
     if user_games:
         for g in user_games:
-            embed, file = await cog.build_game_embed(g, week, roster, deadline=deadline)
+            embed, file = await cog.build_game_embed(g, week, roster, deadline=deadline, mention_users=False)
             view = CompleteGameView(cog=cog, game_id=g["game_id"], show_schedule_button=True)
             send_kwargs = {"embed": embed, "view": view, "allowed_mentions": discord.AllowedMentions.none()}
             if file is not None:
@@ -1146,20 +1149,30 @@ class Scheduling(commands.Cog):
             self.bot.add_view(view)
 
     async def build_game_embed(
-        self, game: dict, week: int, roster: dict, deadline: str | None = None, include_image: bool = True
+        self, game: dict, week: int, roster: dict, deadline: str | None = None,
+        include_image: bool = True, mention_users: bool = True
     ) -> tuple[discord.Embed, discord.File | None]:
         """Returns (embed, file). If file is not None, it must be attached to
         the same message via send(file=file) for the embed's image to render —
         the embed references it internally as attachment://matchup.png.
         Pass include_image=False to skip the logo fetch/composite entirely
-        (e.g. when only refreshing text on an embed whose image is unchanged)."""
+        (e.g. when only refreshing text on an embed whose image is unchanged).
+        Pass mention_users=False to use plain usernames instead of @mentions
+        (used for user-game channel embeds, since mentions live in the thread)."""
         home = self.teams[game["home"]]
         away = self.teams[game["away"]]
-        home_owner_id = roster.get(game["home"], {}).get("user_id")
-        away_owner_id = roster.get(game["away"], {}).get("user_id")
+        home_entry = roster.get(game["home"], {})
+        away_entry = roster.get(game["away"], {})
+        home_owner_id = home_entry.get("user_id")
+        away_owner_id = away_entry.get("user_id")
+        home_username = home_entry.get("username", "Unknown")
+        away_username = away_entry.get("username", "Unknown")
 
         if game["type"] == "user":
-            description = f"<@{home_owner_id}> vs <@{away_owner_id}>"
+            if mention_users:
+                description = f"<@{home_owner_id}> vs <@{away_owner_id}>"
+            else:
+                description = f"{home_username} vs {away_username}"
         else:
             if home_owner_id:
                 description = f"<@{home_owner_id}> vs CPU"
