@@ -720,17 +720,19 @@ async def _do_advance_week(
     roster = load_roster()
     cog = bot.get_cog("Scheduling")
 
-    existing_category_id = week_data.get("category_id")
-    category = None
-    if existing_category_id:
-        category = guild.get_channel(existing_category_id)
-        if category:
-            await category.edit(name=f"🏈 WEEK {week}")
-    if category is None:
-        category = await guild.create_category(f"🏈 WEEK {week}")
+    scheduling_category = discord.utils.find(
+        lambda c: isinstance(c, discord.CategoryChannel) and c.name.lower() == "scheduling",
+        guild.channels,
+    )
+    if scheduling_category is None:
+        await interaction.followup.send(
+            "❌ No **Scheduling** category found in this server. Create a category named `Scheduling` and try again.",
+            ephemeral=True,
+        )
+        return
 
-    user_channel = await guild.create_text_channel("user-games", category=category)
-    cpu_channel = await guild.create_text_channel("cpu-games", category=category)
+    user_channel = await guild.create_text_channel(f"week-{week}-user-games", category=scheduling_category)
+    cpu_channel = await guild.create_text_channel(f"week-{week}-cpu-games", category=scheduling_category)
 
     user_games = [g for g in week_data["games"] if g["type"] == "user"]
     cpu_games = [g for g in week_data["games"] if g["type"] == "cpu"]
@@ -787,7 +789,6 @@ async def _do_advance_week(
     week_data["status"] = "active"
     week_data["deadline"] = deadline
     week_data["cpu_deadline"] = cpu_deadline
-    week_data["category_id"] = category.id
     week_data["user_channel_id"] = user_channel.id
     week_data["cpu_channel_id"] = cpu_channel.id
     season["weeks"][week_key] = week_data
@@ -1334,7 +1335,6 @@ class Scheduling(commands.Cog):
 
         week_data = season.setdefault("weeks", {}).setdefault(week_key, {
             "status": "upcoming",
-            "category_id": None,
             "user_channel_id": None,
             "cpu_channel_id": None,
             "games": [],
@@ -1365,12 +1365,6 @@ class Scheduling(commands.Cog):
             "thread_id": None,
             "message_id": None,
         })
-
-        # Create the UPCOMING category in Discord when first game is staged for a week
-        if not week_data.get("category_id"):
-            guild = interaction.guild
-            category = await guild.create_category(f"🏈 WEEK {week} - UPCOMING")
-            week_data["category_id"] = category.id
 
         save_season(season)
 
