@@ -265,7 +265,7 @@ class DefenseWizard:
 
 # ---------- Initial detail modals (popup text fields, shown first) ----------
 
-class OffenseDetailsModal(discord.ui.Modal, title="Offense Scheme Details"):
+class OffenseDetailsModal(discord.ui.Modal, title="Offense Details (Part 1 of 2)"):
     coaching_tree = discord.ui.TextInput(label="Coaching Tree (1 or 2 coaches)", required=True)
     base_playbook = discord.ui.TextInput(label="Base Playbook (e.g. Air Raid)", required=True)
     summary = discord.ui.TextInput(label="Summary", style=discord.TextStyle.paragraph, required=True)
@@ -288,7 +288,7 @@ class OffenseDetailsModal(discord.ui.Modal, title="Offense Scheme Details"):
         await wizard.start(interaction)
 
 
-class DefenseDetailsModal(discord.ui.Modal, title="Defense Scheme Details"):
+class DefenseDetailsModal(discord.ui.Modal, title="Defense Details (Part 1 of 2)"):
     coaching_tree = discord.ui.TextInput(label="Coaching Tree (1 or 2 coaches)", required=True)
     summary = discord.ui.TextInput(label="Summary", style=discord.TextStyle.paragraph, required=True)
 
