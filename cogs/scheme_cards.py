@@ -182,11 +182,15 @@ def build_compact_scheme_card_embed(team_info: dict, card: dict) -> discord.Embe
 
     summary_parts = []
     if offense and offense.get("scheme"):
-        summary_parts.append(f"🏈 {offense['scheme']}")
+        summary_parts.append(f"Offense: {offense['scheme']}")
     if defense and defense.get("scheme"):
-        summary_parts.append(f"🛡️ {defense['scheme']}")
+        summary_parts.append(f"Defense: {defense['scheme']}")
+    scheme_summary = "  •  ".join(summary_parts) if summary_parts else "No scheme set yet"
 
-    embed.description = "  •  ".join(summary_parts) if summary_parts else "No scheme set yet"
+    user_name = card.get("submitted_by", "Unknown")
+    user_line = f"User: {user_name}".ljust(28)
+    summary_line = scheme_summary.ljust(40)
+    embed.description = f"`{user_line}`\n`{summary_line}`"
 
     if card.get("last_updated"):
         embed.set_footer(text=f"Last updated: {card['last_updated']}")
