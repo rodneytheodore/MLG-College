@@ -75,12 +75,28 @@ def build_dashboard_embed(season: dict, roster: dict, scheme_cards: dict) -> dis
         if card.get("offense") and card.get("defense")
     )
 
+    week_data = season.get("weeks", {}).get(str(current_week)) if current_week is not None else None
+    games = week_data.get("games", []) if week_data else []
+
+    cpu_games = [g for g in games if g["type"] == "cpu"]
+    cpu_completed = sum(1 for g in cpu_games if g.get("status") == "completed")
+
+    user_games = [g for g in games if g["type"] == "user"]
+    user_scheduled = sum(1 for g in user_games if g.get("scheduled"))
+    user_completed = sum(1 for g in user_games if g.get("status") == "completed")
+
     embed = discord.Embed(title="🏈 League Status", color=discord.Color.blurple())
     embed.add_field(name="Dynasty Year", value=str(year), inline=True)
     embed.add_field(name="Stage", value=stage, inline=True)
     embed.add_field(name="Current Week", value=week_text, inline=True)
     embed.add_field(name="Teams Claimed", value=f"{claimed_count}/32", inline=True)
-    embed.add_field(name="Scheme Cards Submitted", value=f"{submitted_count}/{claimed_count}", inline=True)
+    embed.add_field(name="Scheme Cards Submitted", value=f"{submitted_count}/{claimed_count}", inline=False)
+    embed.add_field(name="CPU Games Count", value=str(len(cpu_games)), inline=True)
+    embed.add_field(name="CPU Games Completed", value=f"{cpu_completed}/{len(cpu_games)}", inline=True)
+    embed.add_field(name="\u200b", value="\u200b", inline=False)  # invisible spacer, forces a row break
+    embed.add_field(name="User Games Count", value=str(len(user_games)), inline=True)
+    embed.add_field(name="User Games Scheduled", value=f"{user_scheduled}/{len(user_games)}", inline=True)
+    embed.add_field(name="User Games Completed", value=f"{user_completed}/{len(user_games)}", inline=True)
     return embed
 
 
