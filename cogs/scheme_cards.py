@@ -98,12 +98,29 @@ COVERAGE_TYPE_OPTIONS = [
 ]
 PRESSURE_OPTIONS = [(p, p) for p in ["Bring Pressure/Blitz", "Rush Four/Play Coverage"]]
 
+PRESSURE_TYPES = [
+    ("Stunts & Games (TEX, ET, Pirate, etc)", "Stunts & Games"),
+    ("Interior Blitzes (A-Gap, Cross Dog, Mug)", "Interior Blitzes"),
+    ("Edge Blitzes (Sam, Will, Nickel, Corner)", "Edge Blitzes"),
+    ("Zone Pressures (Fire Zones)", "Zone Pressures"),
+    ("Sim Pressures (Creepers, Sims)", "Sim Pressures"),
+    ("Man Pressures (Cover 0, Cover 1)", "Man Pressures"),
+]
+PRESSURE_TYPES_MAX_SELECT = 3
+
+BASE_COVERAGES = [(c, c) for c in [
+    "Cover 0", "Cover 1", "Cover 2", "Cover 2 Man",
+    "Cover 3 Sky/Cloud", "Cover 3 Match/Seam",
+    "Cover 4 Quarters/Palms", "Cover 6/Cover 9",
+]]
+BASE_COVERAGES_MAX_SELECT = 4
+
 OFFENSE_STEP_NAMES = [
     "Scheme", "Tempo", "Run/Pass Tendency", "Playbook Type",
     "Personnel Groupings", "Core Run Concepts",
     "Quick Game Pass Concepts", "Intermediate Pass Concepts", "Deep Pass Concepts",
 ]
-DEFENSE_STEP_NAMES = ["Scheme", "Coverage Shell", "Coverage Type", "Pressure"]
+DEFENSE_STEP_NAMES = ["Scheme", "Coverage Shell", "Coverage Type", "Pressure", "Base Coverages", "Pressures"]
 
 
 def build_scheme_card_embed(team_info: dict, card: dict) -> discord.Embed:
@@ -137,8 +154,10 @@ def build_scheme_card_embed(team_info: dict, card: dict) -> discord.Embed:
     defense = card.get("defense")
     if defense:
         lines = [f"**Scheme:** {defense['scheme']}  \u2022  **Coaching Tree:** {defense['coaching_tree']}"]
-        lines.append(f"**Shell:** {defense['coverage_shell']}  \u2022  **Coverage:** {defense['coverage_type']}")
+        lines.append(f"**Shell:** {defense['coverage_shell']}  \u2022  **Identity:** {defense['coverage_type']}")
+        lines.append(f"**Base Coverages:** {defense['base_coverages']}")
         lines.append(f"**Pressure:** {defense['pressure']}")
+        lines.append(f"**Pressures:** {defense['pressures']}")
         lines.append(f"**Summary:** {defense['summary']}")
         embed.add_field(name="DEFENSE", value="\n".join(lines), inline=False)
 
@@ -376,18 +395,48 @@ class DefenseWizard:
                 view = ChoiceStepView(choices, f"Select your {step_name.lower()}...", self._make_advance_callback())
                 await interaction.response.edit_message(content=prompt, view=view)
             else:
-                cards = load_scheme_cards()
-                card = cards.setdefault(self.abbr, {})
-                card["defense"] = self.data
-                card["submitted_by"] = true_display_name(interaction.user)
-                save_scheme_cards(cards)
-
-                await interaction.response.edit_message(
-                    content=f"\u2705 Defense scheme saved for **{self.cog.teams[self.abbr]['name']}**.",
-                    view=None,
-                )
-                await self.cog.refresh_scheme_cards_channel()
+                await self._show_base_coverages_step(interaction)
         return on_pick
+
+    async def _show_base_coverages_step(self, interaction: discord.Interaction):
+        view = MultiSelectStepView(
+            BASE_COVERAGES, BASE_COVERAGES_MAX_SELECT, "Base Coverages",
+            self._after_base_coverages,
+        )
+        await interaction.response.edit_message(
+            content="**(Part 2 of 2) Step 5/6 — Select up to 4 Base Coverages**, then confirm:",
+            view=view,
+        )
+
+    async def _after_base_coverages(self, interaction: discord.Interaction, selected: list[str]):
+        self.data["base_coverages"] = ", ".join(selected)
+        await self._show_pressures_step(interaction)
+
+    async def _show_pressures_step(self, interaction: discord.Interaction):
+        view = MultiSelectStepView(
+            PRESSURE_TYPES, PRESSURE_TYPES_MAX_SELECT, "pressures",
+            self._after_pressures,
+        )
+        await interaction.response.edit_message(
+            content=f"**(Part 2 of 2) Step 6/6 — Select your top pressures** "
+            f"(up to {PRESSURE_TYPES_MAX_SELECT}, then confirm):",
+            view=view,
+        )
+
+    async def _after_pressures(self, interaction: discord.Interaction, selected: list[str]):
+        self.data["pressures"] = ", ".join(selected)
+
+        cards = load_scheme_cards()
+        card = cards.setdefault(self.abbr, {})
+        card["defense"] = self.data
+        card["submitted_by"] = true_display_name(interaction.user)
+        save_scheme_cards(cards)
+
+        await interaction.response.edit_message(
+            content=f"\u2705 Defense scheme saved for **{self.cog.teams[self.abbr]['name']}**.",
+            view=None,
+        )
+        await self.cog.refresh_scheme_cards_channel()
 
 
 # ---------- Initial detail modals (popup text fields, shown first) ----------
