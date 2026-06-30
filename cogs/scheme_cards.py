@@ -1,5 +1,3 @@
-from typing import Literal
-
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -18,6 +16,18 @@ from utils.data import (
 from utils.responses import send_ephemeral
 
 
+# ---------- Option lists: (button_label, stored_value) ----------
+
+OFFENSE_SCHEME_OPTIONS = [(s, s) for s in [
+    "Air Raid", "Spread", "Spread Option", "Option",
+    "Pro Style", "Power Spread", "Pistol", "Multiple",
+]]
+OFFENSE_TEMPO_OPTIONS = [(t, t) for t in ["Ball Control", "No Huddle", "Turbo"]]
+PLAYBOOK_TYPE_OPTIONS = [
+    ("Stock", "Stock"),
+    ("Custom (<5 Formation Difference)", "Custom"),
+    ("Full Custom (>=5 Formation Difference)", "Full Custom"),
+]
 PERSONNEL_GROUPINGS = [
     "11 — 1 RB 1 TE",
     "12 — 1 RB 2 TE",
@@ -28,6 +38,87 @@ PERSONNEL_GROUPINGS = [
     "13 — 1 RB 3 TE",
 ]
 
+DEFENSE_SCHEME_OPTIONS = [(s, s) for s in [
+    "4-3", "4-3 Multiple", "3-4", "3-4 Multiple", "Multiple",
+    "3-3-5", "3-3-5 Tite", "4-2-5", "3-2-6",
+]]
+COVERAGE_SHELL_OPTIONS = [(s, s) for s in ["Single High Safety", "Two High Safety", "Hybrid Safety Shell"]]
+COVERAGE_TYPE_OPTIONS = [
+    ("Man (C2 Man, C1, C0, Man Blitz)", "Man Coverage"),
+    ("Zone (C3, Tampa 2, C4 Drop, Zone Blitz)", "Zone Coverage"),
+    ("Match (C4, C3 Seam, C6, C9, C2 Sink)", "Match Coverage"),
+]
+PRESSURE_OPTIONS = [(p, p) for p in ["Bring Pressure/Blitz", "Rush Four/Play Coverage"]]
+
+OFFENSE_STEP_NAMES = ["Scheme", "Tempo", "Playbook Type", "Personnel Groupings"]
+DEFENSE_STEP_NAMES = ["Scheme", "Coverage Shell", "Coverage Type", "Pressure"]
+
+
+def build_scheme_card_embed(team_info: dict, card: dict) -> discord.Embed:
+    embed = discord.Embed(
+        title=team_info["name"],
+        color=int(team_info["color"], 16) if team_info.get("color") else discord.Color.default(),
+    )
+    logo = team_info.get("logoDark") or team_info.get("logo")
+    if logo:
+        embed.set_thumbnail(url=logo)
+
+    offense = card.get("offense")
+    if offense and offense.get("personnel"):
+        header_line = f"**Coach:** {offense['coach']}"
+        if offense.get("film"):
+            header_line += f"  \u2022  **Stream Link:** {offense['film']}"
+        embed.description = header_line
+
+        lines = [f"**Scheme:** {offense['scheme']}  \u2022  **Coaching Tree:** {offense['coaching_tree']}"]
+        lines.append(f"**Personnel:** {offense['personnel']}")
+        lines.append(f"**Tempo:** {offense['tempo']}")
+        lines.append(f"**Playbook Type:** {offense['playbook_type']}  \u2022  **Base Playbook:** {offense['base_playbook']}")
+        lines.append(f"**Summary:** {offense['summary']}")
+        embed.add_field(name="OFFENSE", value="\n".join(lines), inline=False)
+
+    defense = card.get("defense")
+    if defense:
+        lines = [f"**Scheme:** {defense['scheme']}  \u2022  **Coaching Tree:** {defense['coaching_tree']}"]
+        lines.append(f"**Shell:** {defense['coverage_shell']}  \u2022  **Coverage:** {defense['coverage_type']}")
+        lines.append(f"**Pressure:** {defense['pressure']}")
+        lines.append(f"**Summary:** {defense['summary']}")
+        embed.add_field(name="DEFENSE", value="\n".join(lines), inline=False)
+
+    return embed
+
+
+def build_step_prompt(step_names: list[str], index: int, label: str) -> str:
+    """Builds the prompt text for a wizard step, including a 'Next up' preview
+    of the following step (or nothing, if this is the last one)."""
+    total = len(step_names)
+    text = f"**Step {index + 1}/{total} — Pick your {label.lower()}:**"
+    if index + 1 < total:
+        text += f"\n*Next up: {step_names[index + 1]}*"
+    return text
+
+
+# ---------- Generic single-select button step ----------
+
+class ChoiceStepView(discord.ui.View):
+    """A row (or two) of buttons, each representing one choice. Picking one
+    advances the wizard that owns this step."""
+
+    def __init__(self, choices: list[tuple[str, str]], on_pick):
+        super().__init__(timeout=180)
+        self.on_pick = on_pick
+        for label, value in choices:
+            btn = discord.ui.Button(label=label[:80], style=discord.ButtonStyle.secondary)
+            btn.callback = self._make_callback(value)
+            self.add_item(btn)
+
+    def _make_callback(self, value: str):
+        async def callback(interaction: discord.Interaction):
+            await self.on_pick(interaction, value)
+        return callback
+
+
+# ---------- Personnel groupings: final button step of the offense wizard ----------
 
 class PersonnelGroupingsView(discord.ui.View):
     """Toggle buttons for selecting multiple personnel groupings, then confirm to save."""
@@ -76,51 +167,140 @@ class PersonnelGroupingsView(discord.ui.View):
         for child in self.children:
             child.disabled = True
         await interaction.response.edit_message(
-            content=f"Personnel groupings saved: {self.offense_data['personnel']}", view=self
+            content=f"\u2705 Offense scheme saved. Personnel: {self.offense_data['personnel']}", view=self
         )
 
         await self.cog.refresh_scheme_cards_channel()
 
 
-def can_edit_card(interaction: discord.Interaction, team_abbr: str, roster: dict) -> bool:
-    if is_admin(interaction):
-        return True
-    owner = roster.get(team_abbr, {})
-    return owner.get("user_id") == interaction.user.id
+# ---------- Offense wizard: Scheme -> Tempo -> Playbook Type -> Personnel ----------
+
+class OffenseWizard:
+    STEPS = [
+        ("scheme", OFFENSE_SCHEME_OPTIONS),
+        ("tempo", OFFENSE_TEMPO_OPTIONS),
+        ("playbook_type", PLAYBOOK_TYPE_OPTIONS),
+    ]
+
+    def __init__(self, cog: "SchemeCards", abbr: str, base_data: dict):
+        self.cog = cog
+        self.abbr = abbr
+        self.data = base_data
+        self.step_index = 0
+
+    async def start(self, interaction: discord.Interaction):
+        field_key, choices = self.STEPS[0]
+        prompt = build_step_prompt(OFFENSE_STEP_NAMES, 0, OFFENSE_STEP_NAMES[0])
+        view = ChoiceStepView(choices, self._make_advance_callback())
+        await interaction.response.send_message(prompt, view=view, ephemeral=True)
+
+    def _make_advance_callback(self):
+        async def on_pick(interaction: discord.Interaction, value: str):
+            field_key = self.STEPS[self.step_index][0]
+            self.data[field_key] = value
+            self.step_index += 1
+
+            if self.step_index < len(self.STEPS):
+                _, choices = self.STEPS[self.step_index]
+                prompt = build_step_prompt(OFFENSE_STEP_NAMES, self.step_index, OFFENSE_STEP_NAMES[self.step_index])
+                view = ChoiceStepView(choices, self._make_advance_callback())
+                await interaction.response.edit_message(content=prompt, view=view)
+            else:
+                view = PersonnelGroupingsView(cog=self.cog, abbr=self.abbr, offense_data=self.data)
+                await interaction.response.edit_message(
+                    content="**Step 4/4 — Select your primary personnel groupings** "
+                    "(check all that apply, then confirm):",
+                    view=view,
+                )
+        return on_pick
 
 
-def build_scheme_card_embed(team_info: dict, card: dict) -> discord.Embed:
-    embed = discord.Embed(
-        title=team_info["name"],
-        color=int(team_info["color"], 16) if team_info.get("color") else discord.Color.default(),
-    )
-    logo = team_info.get("logoDark") or team_info.get("logo")
-    if logo:
-        embed.set_thumbnail(url=logo)
+# ---------- Defense wizard: Scheme -> Coverage Shell -> Coverage Type -> Pressure ----------
 
-    offense = card.get("offense")
-    if offense and offense.get("personnel"):
-        header_line = f"**Coach:** {offense['coach']}"
-        if offense.get("film"):
-            header_line += f"  \u2022  **Stream Link:** {offense['film']}"
-        embed.description = header_line
+class DefenseWizard:
+    STEPS = [
+        ("scheme", DEFENSE_SCHEME_OPTIONS),
+        ("coverage_shell", COVERAGE_SHELL_OPTIONS),
+        ("coverage_type", COVERAGE_TYPE_OPTIONS),
+        ("pressure", PRESSURE_OPTIONS),
+    ]
 
-        lines = [f"**Scheme:** {offense['scheme']}  \u2022  **Coaching Tree:** {offense['coaching_tree']}"]
-        lines.append(f"**Personnel:** {offense['personnel']}")
-        lines.append(f"**Tempo:** {offense['tempo']}")
-        lines.append(f"**Playbook Type:** {offense['playbook_type']}  \u2022  **Base Playbook:** {offense['base_playbook']}")
-        lines.append(f"**Summary:** {offense['summary']}")
-        embed.add_field(name="OFFENSE", value="\n".join(lines), inline=False)
+    def __init__(self, cog: "SchemeCards", abbr: str, base_data: dict):
+        self.cog = cog
+        self.abbr = abbr
+        self.data = base_data
+        self.step_index = 0
 
-    defense = card.get("defense")
-    if defense:
-        lines = [f"**Scheme:** {defense['scheme']}  \u2022  **Coaching Tree:** {defense['coaching_tree']}"]
-        lines.append(f"**Shell:** {defense['coverage_shell']}  \u2022  **Coverage:** {defense['coverage_type']}")
-        lines.append(f"**Pressure:** {defense['pressure']}")
-        lines.append(f"**Summary:** {defense['summary']}")
-        embed.add_field(name="DEFENSE", value="\n".join(lines), inline=False)
+    async def start(self, interaction: discord.Interaction):
+        field_key, choices = self.STEPS[0]
+        prompt = build_step_prompt(DEFENSE_STEP_NAMES, 0, DEFENSE_STEP_NAMES[0])
+        view = ChoiceStepView(choices, self._make_advance_callback())
+        await interaction.response.send_message(prompt, view=view, ephemeral=True)
 
-    return embed
+    def _make_advance_callback(self):
+        async def on_pick(interaction: discord.Interaction, value: str):
+            field_key = self.STEPS[self.step_index][0]
+            self.data[field_key] = value
+            self.step_index += 1
+
+            if self.step_index < len(self.STEPS):
+                _, choices = self.STEPS[self.step_index]
+                prompt = build_step_prompt(DEFENSE_STEP_NAMES, self.step_index, DEFENSE_STEP_NAMES[self.step_index])
+                view = ChoiceStepView(choices, self._make_advance_callback())
+                await interaction.response.edit_message(content=prompt, view=view)
+            else:
+                cards = load_scheme_cards()
+                card = cards.setdefault(self.abbr, {})
+                card["defense"] = self.data
+                card["submitted_by"] = true_display_name(interaction.user)
+                save_scheme_cards(cards)
+
+                await interaction.response.edit_message(
+                    content=f"\u2705 Defense scheme saved for **{self.cog.teams[self.abbr]['name']}**.",
+                    view=None,
+                )
+                await self.cog.refresh_scheme_cards_channel()
+        return on_pick
+
+
+# ---------- Initial detail modals (popup text fields, shown first) ----------
+
+class OffenseDetailsModal(discord.ui.Modal, title="Offense Scheme Details"):
+    coaching_tree = discord.ui.TextInput(label="Coaching Tree (1 or 2 coaches)", required=True)
+    base_playbook = discord.ui.TextInput(label="Base Playbook (e.g. Air Raid)", required=True)
+    summary = discord.ui.TextInput(label="Summary", style=discord.TextStyle.paragraph, required=True)
+    film = discord.ui.TextInput(label="Stream Link (Twitch, YouTube, etc.)", required=True)
+
+    def __init__(self, cog: "SchemeCards", abbr: str):
+        super().__init__()
+        self.cog = cog
+        self.abbr = abbr
+
+    async def on_submit(self, interaction: discord.Interaction):
+        base_data = {
+            "coach": true_display_name(interaction.user),
+            "coaching_tree": str(self.coaching_tree),
+            "base_playbook": str(self.base_playbook),
+            "summary": str(self.summary),
+            "film": str(self.film),
+        }
+        wizard = OffenseWizard(cog=self.cog, abbr=self.abbr, base_data=base_data)
+        await wizard.start(interaction)
+
+
+class DefenseDetailsModal(discord.ui.Modal, title="Defense Scheme Details"):
+    coaching_tree = discord.ui.TextInput(label="Coaching Tree (1 or 2 coaches)", required=True)
+    summary = discord.ui.TextInput(label="Summary", style=discord.TextStyle.paragraph, required=True)
+
+    def __init__(self, cog: "SchemeCards", abbr: str):
+        super().__init__()
+        self.cog = cog
+        self.abbr = abbr
+
+    async def on_submit(self, interaction: discord.Interaction):
+        base_data = {"coaching_tree": str(self.coaching_tree), "summary": str(self.summary)}
+        wizard = DefenseWizard(cog=self.cog, abbr=self.abbr, base_data=base_data)
+        await wizard.start(interaction)
 
 
 class SchemeCards(commands.Cog):
@@ -174,103 +354,24 @@ class SchemeCards(commands.Cog):
     # ---------- Commands ----------
 
     @app_commands.command(name="set_offense_scheme", description="Set your team's offensive scheme card")
-    @app_commands.describe(
-        scheme="Offensive scheme",
-        coaching_tree="Coaching Tree (1 or 2 coaches)",
-        tempo="Tempo/philosophy",
-        playbook_type="Playbook type",
-        base_playbook="Base playbook (e.g. Air Raid, West Coast)",
-        summary="Short summary of your offensive approach",
-        film="Stream link (Twitch, YouTube, etc.)",
-    )
-    @app_commands.choices(
-        playbook_type=[
-            app_commands.Choice(name="Stock", value="Stock"),
-            app_commands.Choice(name="Custom (<5 Formation Difference)", value="Custom"),
-            app_commands.Choice(name="Full Custom (>=5 Formation Difference)", value="Full Custom"),
-        ],
-    )
-    async def set_offense_scheme(
-        self, interaction: discord.Interaction,
-        scheme: Literal["Air Raid", "Spread", "Spread Option", "Option", "Pro Style", "Power Spread", "Pistol", "Multiple"],
-        coaching_tree: str,
-        tempo: Literal["Ball Control", "No Huddle", "Turbo"],
-        playbook_type: str,
-        base_playbook: str,
-        summary: str,
-        film: str,
-    ):
+    async def set_offense_scheme(self, interaction: discord.Interaction):
         roster = load_roster()
         abbr, error = self.resolve_owned_team(interaction, roster)
         if error:
             await send_ephemeral(interaction, error)
             return
 
-        coach = true_display_name(interaction.user)
-
-        offense_data = {
-            "coach": coach,
-            "scheme": scheme,
-            "coaching_tree": coaching_tree,
-            "personnel": None,  # filled in by the button selection below
-            "tempo": tempo,
-            "playbook_type": playbook_type,
-            "base_playbook": base_playbook,
-            "film": film,
-            "summary": summary,
-        }
-
-        view = PersonnelGroupingsView(cog=self, abbr=abbr, offense_data=offense_data)
-        await interaction.response.send_message(
-            "Select your primary personnel groupings — check all that apply, then confirm.",
-            view=view,
-            ephemeral=True,
-        )
+        await interaction.response.send_modal(OffenseDetailsModal(cog=self, abbr=abbr))
 
     @app_commands.command(name="set_defense_scheme", description="Set your team's defensive scheme card")
-    @app_commands.describe(
-        scheme="Defensive scheme",
-        coaching_tree="Coaching Tree (1 or 2 coaches)",
-        coverage_shell="Coverage shell",
-        coverage_type="Coverage type",
-        pressure="Pressure package/approach",
-        summary="Short summary of your defensive approach",
-    )
-    @app_commands.choices(coverage_type=[
-        app_commands.Choice(name="Man (C2 Man, C1, C0, Man Blitz)", value="Man Coverage"),
-        app_commands.Choice(name="Zone (C3, Tampa 2, C4 Drop, Zone Blitz)", value="Zone Coverage"),
-        app_commands.Choice(name="Match (C4, C3 Seam, C6, C9, C2 Sink)", value="Match Coverage"),
-    ])
-    async def set_defense_scheme(
-        self, interaction: discord.Interaction,
-        scheme: Literal["4-3", "4-3 Multiple", "3-4", "3-4 Multiple", "Multiple", "3-3-5", "3-3-5 Tite", "4-2-5", "3-2-6"],
-        coaching_tree: str,
-        coverage_shell: Literal["Single High Safety", "Two High Safety", "Hybrid Safety Shell"],
-        coverage_type: str,
-        pressure: Literal["Bring Pressure/Blitz", "Rush Four/Play Coverage"],
-        summary: str,
-    ):
+    async def set_defense_scheme(self, interaction: discord.Interaction):
         roster = load_roster()
         abbr, error = self.resolve_owned_team(interaction, roster)
         if error:
             await send_ephemeral(interaction, error)
             return
 
-        cards = load_scheme_cards()
-        card = cards.setdefault(abbr, {})
-        card["defense"] = {
-            "scheme": scheme,
-            "coaching_tree": coaching_tree,
-            "coverage_shell": coverage_shell,
-            "coverage_type": coverage_type,
-            "pressure": pressure,
-            "summary": summary,
-        }
-        card["submitted_by"] = true_display_name(interaction.user)
-        save_scheme_cards(cards)
-
-        await send_ephemeral(interaction, f"Defense scheme saved for **{self.teams[abbr]['name']}**.")
-        await self.refresh_scheme_cards_channel()
+        await interaction.response.send_modal(DefenseDetailsModal(cog=self, abbr=abbr))
 
     @app_commands.command(name="post_scheme_cards", description="Set this channel as the live scheme cards display (admin only)")
     async def post_scheme_cards(self, interaction: discord.Interaction):
