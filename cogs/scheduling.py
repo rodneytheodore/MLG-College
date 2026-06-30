@@ -338,7 +338,7 @@ async def _do_advance_week(
     if user_games:
         for g in user_games:
             embed, file = await cog.build_game_embed(g, week, roster, deadline=deadline)
-            view = CompleteGameView(cog=cog, game_id=g["game_id"])
+            view = CompleteGameView(cog=cog, game_id=g["game_id"], show_schedule_button=True)
             send_kwargs = {"embed": embed, "view": view, "allowed_mentions": discord.AllowedMentions.none()}
             if file is not None:
                 send_kwargs["file"] = file
@@ -347,7 +347,7 @@ async def _do_advance_week(
             home_owner_id = roster.get(g["home"], {}).get("user_id")
             away_owner_id = roster.get(g["away"], {}).get("user_id")
             await thread.send(
-                f"<@{home_owner_id}> <@{away_owner_id}> use this thread to schedule your game and report results.{deadline_line}",
+                f"<@{home_owner_id}> <@{away_owner_id}> use this thread to schedule your game and report completion.{deadline_line}",
                 allowed_mentions=discord.AllowedMentions(users=True),
             )
             g["thread_id"] = thread.id
@@ -525,41 +525,90 @@ def find_game_by_id(season: dict, game_id: str):
     return None, None
 
 
-class CompleteGameView(discord.ui.View):
-    """Persistent button for marking a CPU game complete. Survives bot
-    restarts since it's registered with a stable custom_id and timeout=None."""
+async def _load_authorized_game(interaction: discord.Interaction, game_id: str):
+    """Shared lookup + permission check used by both the Scheduled and
+    Completed buttons. Returns (season, week, game, roster) on success,
+    or None after sending the appropriate ephemeral error itself."""
+    season = load_season()
+    week, game = find_game_by_id(season, game_id)
+    if game is None:
+        await interaction.response.send_message("Couldn't find this game anymore.", ephemeral=True)
+        return None
 
-    def __init__(self, cog: "Scheduling", game_id: str, completed: bool = False):
+    roster = load_roster()
+    home_owner_id = roster.get(game["home"], {}).get("user_id")
+    away_owner_id = roster.get(game["away"], {}).get("user_id")
+    authorized = is_admin(interaction) or interaction.user.id in (home_owner_id, away_owner_id)
+
+    if not authorized:
+        await interaction.response.send_message(
+            "Only an admin or one of the teams' owners can do that.", ephemeral=True
+        )
+        return None
+
+    return season, week, game, roster
+
+
+class CompleteGameView(discord.ui.View):
+    """Persistent buttons for a game: Mark Completed always present, plus an
+    optional Mark Scheduled button for user games. Survives bot restarts
+    since it's registered with stable custom_ids and timeout=None."""
+
+    def __init__(
+        self, cog: "Scheduling", game_id: str,
+        completed: bool = False, scheduled: bool = False, show_schedule_button: bool = False,
+    ):
         super().__init__(timeout=None)
         self.cog = cog
         self.game_id = game_id
 
-        button = discord.ui.Button(
+        if show_schedule_button:
+            schedule_btn = discord.ui.Button(
+                label="📅 Scheduled" if scheduled else "Mark Scheduled",
+                style=discord.ButtonStyle.success if scheduled else discord.ButtonStyle.secondary,
+                disabled=scheduled,
+                custom_id=f"schedule_game:{game_id}",
+            )
+            schedule_btn.callback = self._on_schedule_click
+            self.add_item(schedule_btn)
+
+        complete_btn = discord.ui.Button(
             label="✅ Completed" if completed else "Mark Completed",
             style=discord.ButtonStyle.success if completed else discord.ButtonStyle.secondary,
             disabled=completed,
             custom_id=f"complete_game:{game_id}",
         )
-        button.callback = self._on_click
-        self.add_item(button)
+        complete_btn.callback = self._on_complete_click
+        self.add_item(complete_btn)
 
-    async def _on_click(self, interaction: discord.Interaction):
-        season = load_season()
-        week, game = find_game_by_id(season, self.game_id)
-        if game is None:
-            await interaction.response.send_message("Couldn't find this game anymore.", ephemeral=True)
+    async def _on_schedule_click(self, interaction: discord.Interaction):
+        result = await _load_authorized_game(interaction, self.game_id)
+        if result is None:
             return
+        season, week, game, roster = result
 
-        roster = load_roster()
-        home_owner_id = roster.get(game["home"], {}).get("user_id")
-        away_owner_id = roster.get(game["away"], {}).get("user_id")
-        authorized = is_admin(interaction) or interaction.user.id in (home_owner_id, away_owner_id)
+        game["scheduled"] = True
+        save_season(season)
 
-        if not authorized:
-            await interaction.response.send_message(
-                "Only an admin or one of the teams' owners can mark this complete.", ephemeral=True
-            )
+        week_data = season["weeks"][str(week)]
+        relevant_deadline = week_data.get("deadline") if game["type"] == "user" else None
+
+        embed, file = await self.cog.build_game_embed(game, week, roster, deadline=relevant_deadline)
+        new_view = CompleteGameView(
+            cog=self.cog, game_id=self.game_id,
+            completed=(game.get("status") == "completed"), scheduled=True, show_schedule_button=True,
+        )
+        edit_kwargs = {"embed": embed, "view": new_view}
+        if file is not None:
+            edit_kwargs["attachments"] = [file]
+        await interaction.response.edit_message(**edit_kwargs)
+        await interaction.followup.send("📅 Marked as scheduled.", ephemeral=True)
+
+    async def _on_complete_click(self, interaction: discord.Interaction):
+        result = await _load_authorized_game(interaction, self.game_id)
+        if result is None:
             return
+        season, week, game, roster = result
 
         game["status"] = "completed"
         save_season(season)
@@ -568,7 +617,10 @@ class CompleteGameView(discord.ui.View):
         relevant_deadline = week_data.get("deadline") if game["type"] == "user" else None
 
         embed, file = await self.cog.build_game_embed(game, week, roster, deadline=relevant_deadline)
-        new_view = CompleteGameView(cog=self.cog, game_id=self.game_id, completed=True)
+        new_view = CompleteGameView(
+            cog=self.cog, game_id=self.game_id,
+            completed=True, scheduled=game.get("scheduled", False), show_schedule_button=(game["type"] == "user"),
+        )
         edit_kwargs = {"embed": embed, "view": new_view}
         if file is not None:
             edit_kwargs["attachments"] = [file]
@@ -656,7 +708,12 @@ class Scheduling(commands.Cog):
 
         for g in week_data.get("games", []):
             completed = g.get("status") == "completed"
-            view = CompleteGameView(cog=self, game_id=g["game_id"], completed=completed)
+            scheduled = g.get("scheduled", False)
+            is_user_game = g["type"] == "user"
+            view = CompleteGameView(
+                cog=self, game_id=g["game_id"],
+                completed=completed, scheduled=scheduled, show_schedule_button=is_user_game,
+            )
             self.bot.add_view(view)
 
     async def build_game_embed(
@@ -706,6 +763,8 @@ class Scheduling(commands.Cog):
         footer_text = f"Week {week}"
         if deadline:
             footer_text += f"  •  Due: {deadline}"
+        if game["type"] == "user":
+            footer_text += "  •  📅 Scheduled" if game.get("scheduled") else "  •  🕓 Unscheduled"
         if game.get("status") == "completed":
             footer_text += "  •  ✅ Completed"
         embed.set_footer(text=footer_text)
@@ -859,6 +918,7 @@ class Scheduling(commands.Cog):
             "away": away_abbr,
             "type": game_type,
             "status": "scheduled",
+            "scheduled": False,
             "thread_id": None,
             "message_id": None,
         })
