@@ -220,11 +220,15 @@ PHASE_TRANSITIONS = {
 PHASE_DISPLAY = {k: v["display"] for k, v in PHASE_TRANSITIONS.items()}
 
 
-def get_announcement_message(current_phase: str, new_phase: str | None, week: int | None, deadline: str | None, cpu_deadline: str | None) -> str:
-    """Returns the formatted announcement text for a given phase transition or week advance."""
-    dl = f"\n📅 **User Games Due:** {deadline}" if deadline else ""
-    cpu_dl = f"\n📅 **CPU Games Due:** {cpu_deadline}" if cpu_deadline else ""
-    both_dl = f"{cpu_dl}{dl}"
+def get_announcement_message(current_phase: str, new_phase: str | None, week: int | None, deadline: str | None, cpu_deadline: str | None, general_deadline: str | None = None) -> str:
+    """Returns the formatted announcement text for a given phase transition or week advance.
+    Pass general_deadline instead of deadline/cpu_deadline for a single non-game-split due date."""
+    if general_deadline:
+        both_dl = f"\n📅 **Due:** {general_deadline}"
+    else:
+        dl = f"\n📅 **User Games Due:** {deadline}" if deadline else ""
+        cpu_dl = f"\n📅 **CPU Games Due:** {cpu_deadline}" if cpu_deadline else ""
+        both_dl = f"{cpu_dl}{dl}"
 
     messages = {
         # Same-phase week advances
@@ -637,8 +641,9 @@ class AdvanceWeekWizard:
                 current_phase=old_stage,
                 new_phase=new_stage,
                 week=None,
-                deadline=deadline,
-                cpu_deadline=cpu_deadline,
+                deadline=None if (old_stage == "preseason" and not self.week0_has_games) else deadline,
+                cpu_deadline=None if (old_stage == "preseason" and not self.week0_has_games) else cpu_deadline,
+                general_deadline=deadline if (old_stage == "preseason" and not self.week0_has_games) else None,
             )
             await ann_channel.send(msg)
 
