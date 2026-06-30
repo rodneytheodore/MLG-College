@@ -731,7 +731,26 @@ async def _do_advance_week(
         )
         return
 
-    user_channel = await guild.create_text_channel(f"week-{week}-user-games", category=scheduling_category)
+    # User channel: everyone can view, only bot/admins can post; thread access granted per-game
+    user_overwrites = {
+        guild.default_role: discord.PermissionOverwrite(
+            view_channel=True,
+            read_message_history=True,
+            send_messages=False,
+            send_messages_in_threads=False,
+        ),
+        guild.me: discord.PermissionOverwrite(
+            send_messages=True,
+            send_messages_in_threads=True,
+            manage_messages=True,
+            manage_threads=True,
+        ),
+    }
+    user_channel = await guild.create_text_channel(
+        f"week-{week}-user-games",
+        category=scheduling_category,
+        overwrites=user_overwrites,
+    )
     cpu_channel = await guild.create_text_channel(f"week-{week}-cpu-games", category=scheduling_category)
 
     user_games = [g for g in week_data["games"] if g["type"] == "user"]
@@ -761,6 +780,12 @@ async def _do_advance_week(
             thread = await game_msg.create_thread(name=f"{g['home']} vs {g['away']} — Week {week}")
             home_owner_id = roster.get(g["home"], {}).get("user_id")
             away_owner_id = roster.get(g["away"], {}).get("user_id")
+
+            # Grant the two game owners send + interact permissions in their thread
+            for uid in filter(None, (home_owner_id, away_owner_id)):
+                member = guild.get_member(uid)
+                if member:
+                    await thread.set_permissions(member, send_messages=True, use_application_commands=True)
 
             # Buttons live in the thread alongside the ping
             game_view = CompleteGameView(cog=cog, game_id=g["game_id"], show_schedule_button=True)
