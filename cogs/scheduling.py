@@ -21,6 +21,7 @@ from utils.data import (
 )
 from utils.responses import send_ephemeral
 from utils.matchup_image import build_matchup_file
+from cogs.scheme_cards import build_compact_scheme_card_embed, ExpandSchemeCardView
 
 EASTERN = ZoneInfo("America/New_York")
 
@@ -139,60 +140,80 @@ PHASE_TRANSITIONS = {
         "next": "regular_season",
         "week_reset": 0,
         "has_weeks": False,
+        "week_cap": None,
+        "early_switch_allowed": False,
     },
     "regular_season": {
         "display": "Regular Season",
         "next": "conference_championships",
         "week_reset": None,
-        "has_weeks": False,
+        "has_weeks": True,
+        "week_cap": 16,  # default — variable, may need to be configurable later
+        "early_switch_allowed": True,
     },
     "conference_championships": {
         "display": "Conference Championships",
         "next": "postseason",
         "week_reset": 1,
-        "has_weeks": True,
+        "has_weeks": False,
+        "week_cap": None,
+        "early_switch_allowed": False,
     },
     "postseason": {
         "display": "Postseason",
         "next": "offseason_players_leaving",
         "week_reset": None,
-        "has_weeks": False,
+        "has_weeks": True,
+        "week_cap": 4,
+        "early_switch_allowed": False,
     },
     "offseason_players_leaving": {
         "display": "📤 Players Leaving",
         "next": "offseason_transfer_portal",
         "week_reset": None,
         "has_weeks": False,
+        "week_cap": None,
+        "early_switch_allowed": False,
     },
     "offseason_transfer_portal": {
         "display": "🔄 Transfer Portal",
         "next": "offseason_national_signing_day",
         "week_reset": None,
-        "has_weeks": False,
+        "has_weeks": True,
+        "week_cap": 4,
+        "early_switch_allowed": False,
     },
     "offseason_national_signing_day": {
         "display": "✍️ National Signing Day",
         "next": "offseason_position_changes",
         "week_reset": None,
         "has_weeks": False,
+        "week_cap": None,
+        "early_switch_allowed": False,
     },
     "offseason_position_changes": {
         "display": "🔀 Position Changes",
         "next": "offseason_training",
         "week_reset": None,
         "has_weeks": False,
+        "week_cap": None,
+        "early_switch_allowed": False,
     },
     "offseason_training": {
         "display": "💪 Offseason Training",
         "next": "offseason_encourage_transfers",
         "week_reset": None,
         "has_weeks": False,
+        "week_cap": None,
+        "early_switch_allowed": False,
     },
     "offseason_encourage_transfers": {
         "display": "🚪 Encourage Transfers",
         "next": "preseason",
         "week_reset": None,
         "has_weeks": False,
+        "week_cap": None,
+        "early_switch_allowed": False,
     },
 }
 
@@ -203,7 +224,7 @@ def get_announcement_message(current_phase: str, new_phase: str | None, week: in
     """Returns the formatted announcement text for a given phase transition or week advance."""
     dl = f"\n📅 **User Games Due:** {deadline}" if deadline else ""
     cpu_dl = f"\n📅 **CPU Games Due:** {cpu_deadline}" if cpu_deadline else ""
-    both_dl = f"{cpu_dl}{both_dl}"
+    both_dl = f"{cpu_dl}{dl}"
 
     messages = {
         # Same-phase week advances
@@ -225,11 +246,71 @@ def get_announcement_message(current_phase: str, new_phase: str | None, week: in
 
     key = (current_phase, new_phase)
     return messages.get(key, f"🏈 **Week {week} is now live!**{both_dl}")
+
+
+def get_phase(key: str) -> dict:
     return PHASE_TRANSITIONS.get(key, PHASE_TRANSITIONS["preseason"])
 
 
 def next_phase(current: str) -> str | None:
     return get_phase(current).get("next")
+
+
+def week_cap_reached(phase_key: str, current_week: int | None) -> bool:
+    """True if this phase has a week cap and the current week has hit it."""
+    info = get_phase(phase_key)
+    week_cap = info.get("week_cap")
+    if not info.get("has_weeks") or week_cap is None:
+        return False
+    return (current_week or 0) >= week_cap
+
+
+def get_advance_to_options(season: dict) -> list[tuple[str, str]]:
+    """Returns (label, value) pairs for the advance_to dropdown, reflecting
+    the current phase/week so the admin always sees exactly what each option
+    will actually do. value is either 'next_week' or 'next_phase'."""
+    current_stage = season.get("current_stage", "preseason")
+    current_week = season.get("current_week") or 0
+    info = get_phase(current_stage)
+    has_weeks = info.get("has_weeks", False)
+    early_switch = info.get("early_switch_allowed", False)
+    next_phase_key = info.get("next")
+    next_label = PHASE_DISPLAY.get(next_phase_key, next_phase_key) if next_phase_key else None
+
+    options = []
+    if has_weeks:
+        if not week_cap_reached(current_stage, current_week):
+            options.append((f"Next Week (Week {current_week + 1})", "next_week"))
+            if early_switch and next_label:
+                options.append((f"Next Phase ({next_label})", "next_phase"))
+        elif next_label:
+            options.append((f"Next Phase ({next_label})", "next_phase"))
+    elif next_label:
+        options.append((f"Next Phase ({next_label})", "next_phase"))
+
+    return options
+
+
+def resolve_advance_to(season: dict, advance_to: str) -> tuple[int, str, str | None]:
+    """Resolves the advance_to dropdown value into (week, week_label, target_new_phase).
+    target_new_phase is None for 'next_week' (same phase), or the phase key
+    being switched to for 'next_phase'."""
+    current_stage = season.get("current_stage", "preseason")
+    current_week = season.get("current_week") or 0
+
+    if advance_to == "next_phase":
+        target_phase = next_phase(current_stage)
+        week_reset = None
+        for key, info in PHASE_TRANSITIONS.items():
+            if info.get("next") == target_phase and info.get("week_reset") is not None:
+                week_reset = info["week_reset"]
+                break
+        week = week_reset if week_reset is not None else current_week
+        label = f"Week {week} ({PHASE_DISPLAY.get(target_phase, target_phase)})"
+        return week, label, target_phase
+
+    week = current_week + 1
+    return week, f"Week {week}", None
 
 
 class AdvanceWeekView(discord.ui.View):
@@ -246,11 +327,19 @@ class AdvanceWeekView(discord.ui.View):
         self.cpu_deadline = cpu_deadline
 
         current_info = get_phase(current_phase_key)
-        has_weeks = current_info.get("has_weeks", True)
-        is_offseason = current_phase_key.startswith("offseason_")
+        has_weeks = current_info.get("has_weeks", False)
+        early_switch = current_info.get("early_switch_allowed", False)
 
-        # "Advance Week" button — only shown for phases that have weeks
-        if has_weeks and not is_offseason:
+        # Use the season's actual current_week (not the target week being
+        # confirmed) to evaluate whether a week cap has been reached.
+        live_season = load_season()
+        current_week = live_season.get("current_week")
+        at_cap = week_cap_reached(current_phase_key, current_week)
+
+        show_advance_btn = has_weeks and not at_cap
+        show_switch_btn = (not has_weeks) or at_cap or (has_weeks and early_switch and not at_cap)
+
+        if show_advance_btn:
             advance_btn = discord.ui.Button(
                 label="Advance Week (same phase)",
                 style=discord.ButtonStyle.primary,
@@ -259,13 +348,9 @@ class AdvanceWeekView(discord.ui.View):
             advance_btn.callback = self.advance_same_phase
             self.add_item(advance_btn)
 
-        # "Switch Phase" button — always shown, label adapts to context
-        if next_phase_key:
+        if next_phase_key and show_switch_btn:
             next_label = PHASE_DISPLAY.get(next_phase_key, next_phase_key)
-            if is_offseason or not has_weeks:
-                switch_label = f"Advance to {next_label}"
-            else:
-                switch_label = f"Switch to {next_label}"
+            switch_label = f"Switch to {next_label}" if show_advance_btn else f"Advance to {next_label}"
             switch_btn = discord.ui.Button(
                 label=switch_label,
                 style=discord.ButtonStyle.danger,
@@ -273,7 +358,7 @@ class AdvanceWeekView(discord.ui.View):
             )
             switch_btn.callback = self.advance_new_phase
             self.add_item(switch_btn)
-        else:
+        elif not next_phase_key:
             end_btn = discord.ui.Button(
                 label="No further phases — use /new_dynasty or /advance_season",
                 style=discord.ButtonStyle.secondary,
@@ -366,6 +451,18 @@ async def _do_advance_week(
                 f"<@{home_owner_id}> <@{away_owner_id}> use this thread to schedule your game and report completion.{deadline_line}",
                 allowed_mentions=discord.AllowedMentions(users=True),
             )
+
+            scheme_cards_cog = cog.bot.get_cog("SchemeCards")
+            if scheme_cards_cog is not None:
+                all_cards = load_scheme_cards()
+                for team_abbr in (g["home"], g["away"]):
+                    team_card = all_cards.get(team_abbr)
+                    if not team_card or (not team_card.get("offense") and not team_card.get("defense")):
+                        continue
+                    card_embed = build_compact_scheme_card_embed(scheme_cards_cog.teams[team_abbr], team_card)
+                    card_view = ExpandSchemeCardView(cog=scheme_cards_cog, abbr=team_abbr)
+                    await thread.send(embed=card_embed, view=card_view, allowed_mentions=discord.AllowedMentions.none())
+
             g["thread_id"] = thread.id
             g["message_id"] = game_msg.id
     else:
@@ -655,6 +752,27 @@ class CompleteGameView(discord.ui.View):
             delete_at = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()
             game["thread_delete_at"] = delete_at
             save_season(season)
+
+
+class DeadlineTimeModal(discord.ui.Modal, title="Set Deadline Time"):
+    deadline_time = discord.ui.TextInput(label="Time (e.g. 11:59)", required=True, max_length=10)
+
+    def __init__(self, cog: "Scheduling", week: int, week_label: str, week_data: dict,
+                 season: dict, deadline_days: int, deadline_ampm: str):
+        super().__init__()
+        self.cog = cog
+        self.week = week
+        self.week_label = week_label
+        self.week_data = week_data
+        self.season = season
+        self.deadline_days = deadline_days
+        self.deadline_ampm = deadline_ampm
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await self.cog._continue_advance_week(
+            interaction, self.week, self.week_label, self.week_data, self.season,
+            self.deadline_days, str(self.deadline_time), self.deadline_ampm,
+        )
 
 
 class Scheduling(commands.Cog):
@@ -1034,16 +1152,11 @@ class Scheduling(commands.Cog):
 
     @app_commands.command(name="advance_week", description="Advance to the next staged week (admin only)")
     @app_commands.describe(
-        target="Advance To",
-        deadline_days="Deadline (# of days)",
-        deadline_time="Time",
-        deadline_ampm="AM/PM",
+        advance_to="Advance To",
+        deadline_days="Deadline (# of days) \u2014 leave blank for no deadline",
+        deadline_ampm="AM/PM \u2014 leave blank for no deadline",
     )
     @app_commands.choices(
-        target=[
-            app_commands.Choice(name="Current Week", value="current"),
-            app_commands.Choice(name="Next Week", value="next"),
-        ],
         deadline_days=[
             app_commands.Choice(name="1 day", value=1),
             app_commands.Choice(name="2 days", value=2),
@@ -1058,9 +1171,8 @@ class Scheduling(commands.Cog):
     )
     async def advance_week(
         self, interaction: discord.Interaction,
-        target: str,
+        advance_to: str,
         deadline_days: int = None,
-        deadline_time: str = None,
         deadline_ampm: str = None,
     ):
         if not is_admin(interaction):
@@ -1068,7 +1180,7 @@ class Scheduling(commands.Cog):
             return
 
         season = load_season()
-        week, week_label = resolve_target_week(season, target)
+        week, week_label, target_new_phase = resolve_advance_to(season, advance_to)
         week_data = season.get("weeks", {}).get(str(week))
 
         if not week_data or not week_data.get("games"):
@@ -1078,6 +1190,38 @@ class Scheduling(commands.Cog):
             await send_ephemeral(interaction, f"Week {week} is already active.")
             return
 
+        # Only pop the time-entry modal if the admin actually wants a deadline
+        # (picked at least one of days/AM-PM) — otherwise proceed straight
+        # through with no deadline, no extra click needed.
+        wants_deadline = deadline_days is not None or deadline_ampm is not None
+
+        if wants_deadline:
+            modal = DeadlineTimeModal(
+                cog=self, week=week, week_label=week_label, week_data=week_data,
+                season=season, deadline_days=deadline_days, deadline_ampm=deadline_ampm,
+            )
+            await interaction.response.send_modal(modal)
+        else:
+            await self._continue_advance_week(
+                interaction, week, week_label, week_data, season,
+                deadline_days, None, deadline_ampm,
+            )
+
+    @advance_week.autocomplete("advance_to")
+    async def advance_week_advance_to_autocomplete(self, interaction: discord.Interaction, current: str):
+        season = load_season()
+        options = get_advance_to_options(season)
+        current_lower = current.lower()
+        return [
+            app_commands.Choice(name=label, value=value)
+            for label, value in options
+            if current_lower in label.lower()
+        ][:25]
+
+    async def _continue_advance_week(
+        self, interaction: discord.Interaction, week: int, week_label: str,
+        week_data: dict, season: dict, deadline_days: int, deadline_time: str, deadline_ampm: str,
+    ):
         deadline, cpu_deadline = compute_deadline(deadline_days, deadline_time, deadline_ampm)
 
         current_stage = season.get("current_stage", "preseason")
