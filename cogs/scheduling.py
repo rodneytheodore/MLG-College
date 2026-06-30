@@ -2,8 +2,9 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 from typing import Literal
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
+from discord.ext import tasks
 
 from utils.data import (
     load_teams,
@@ -19,6 +20,7 @@ from utils.data import (
     resolve_team,
 )
 from utils.responses import send_ephemeral
+from utils.matchup_image import build_matchup_file
 
 EASTERN = ZoneInfo("America/New_York")
 
@@ -323,17 +325,24 @@ async def _do_advance_week(
         if cpu_deadline:
             await cpu_channel.send(f"📅 **All CPU games due:** {cpu_deadline}")
         for g in cpu_games:
-            embed = cog.build_game_embed(g, week, roster)
+            embed, file = await cog.build_game_embed(g, week, roster)
             view = CompleteGameView(cog=cog, game_id=g["game_id"])
-            cpu_msg = await cpu_channel.send(embed=embed, view=view, allowed_mentions=discord.AllowedMentions.none())
+            send_kwargs = {"embed": embed, "view": view, "allowed_mentions": discord.AllowedMentions.none()}
+            if file is not None:
+                send_kwargs["file"] = file
+            cpu_msg = await cpu_channel.send(**send_kwargs)
             g["message_id"] = cpu_msg.id
     else:
         await cpu_channel.send("No CPU games this week.")
 
     if user_games:
         for g in user_games:
-            embed = cog.build_game_embed(g, week, roster, deadline=deadline)
-            game_msg = await user_channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+            embed, file = await cog.build_game_embed(g, week, roster, deadline=deadline)
+            view = CompleteGameView(cog=cog, game_id=g["game_id"])
+            send_kwargs = {"embed": embed, "view": view, "allowed_mentions": discord.AllowedMentions.none()}
+            if file is not None:
+                send_kwargs["file"] = file
+            game_msg = await user_channel.send(**send_kwargs)
             thread = await game_msg.create_thread(name=f"{g['home']} vs {g['away']} — Week {week}")
             home_owner_id = roster.get(g["home"], {}).get("user_id")
             away_owner_id = roster.get(g["away"], {}).get("user_id")
@@ -555,9 +564,29 @@ class CompleteGameView(discord.ui.View):
         game["status"] = "completed"
         save_season(season)
 
-        embed = self.cog.build_game_embed(game, week, roster)
+        week_data = season["weeks"][str(week)]
+        relevant_deadline = week_data.get("deadline") if game["type"] == "user" else None
+
+        embed, file = await self.cog.build_game_embed(game, week, roster, deadline=relevant_deadline)
         new_view = CompleteGameView(cog=self.cog, game_id=self.game_id, completed=True)
-        await interaction.response.edit_message(embed=embed, view=new_view)
+        edit_kwargs = {"embed": embed, "view": new_view}
+        if file is not None:
+            edit_kwargs["attachments"] = [file]
+        await interaction.response.edit_message(**edit_kwargs)
+
+        if game["type"] == "user" and game.get("thread_id"):
+            thread_id = game["thread_id"]
+            try:
+                thread = self.cog.bot.get_channel(thread_id) or await self.cog.bot.fetch_channel(thread_id)
+                await thread.send("✅ This game has been marked completed. This thread will be deleted in 5 minutes.")
+            except (discord.NotFound, discord.HTTPException):
+                pass
+
+            # Persist the deletion time so it survives a bot restart — the
+            # background cleanup_threads loop picks this up, not an in-memory timer.
+            delete_at = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()
+            game["thread_delete_at"] = delete_at
+            save_season(season)
 
 
 class Scheduling(commands.Cog):
@@ -566,6 +595,50 @@ class Scheduling(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.teams = load_teams()
+        self.cleanup_threads.start()
+
+    def cog_unload(self):
+        self.cleanup_threads.cancel()
+
+    @tasks.loop(minutes=1)
+    async def cleanup_threads(self):
+        """Checks every minute for any completed user game whose 5-minute
+        thread-deletion timer has passed, and deletes that thread. Reading the
+        timestamp from disk (rather than an in-memory timer) means a deletion
+        that was due during a restart still gets picked up once the bot is
+        back online."""
+        season = load_season()
+        now = datetime.now(timezone.utc)
+        changed = False
+
+        for week_data in season.get("weeks", {}).values():
+            for g in week_data.get("games", []):
+                delete_at_str = g.get("thread_delete_at")
+                if not delete_at_str:
+                    continue
+
+                delete_at = datetime.fromisoformat(delete_at_str)
+                if now < delete_at:
+                    continue
+
+                thread_id = g.get("thread_id")
+                if thread_id:
+                    try:
+                        thread = self.bot.get_channel(thread_id) or await self.bot.fetch_channel(thread_id)
+                        await thread.delete()
+                    except (discord.NotFound, discord.HTTPException):
+                        pass
+
+                g["thread_id"] = None
+                g["thread_delete_at"] = None
+                changed = True
+
+        if changed:
+            save_season(season)
+
+    @cleanup_threads.before_loop
+    async def before_cleanup_threads(self):
+        await self.bot.wait_until_ready()
 
     def register_active_views(self):
         """Re-registers persistent CompleteGameView buttons for every CPU game
@@ -582,13 +655,18 @@ class Scheduling(commands.Cog):
             return
 
         for g in week_data.get("games", []):
-            if g["type"] != "cpu":
-                continue
             completed = g.get("status") == "completed"
             view = CompleteGameView(cog=self, game_id=g["game_id"], completed=completed)
             self.bot.add_view(view)
 
-    def build_game_embed(self, game: dict, week: int, roster: dict, deadline: str | None = None) -> discord.Embed:
+    async def build_game_embed(
+        self, game: dict, week: int, roster: dict, deadline: str | None = None, include_image: bool = True
+    ) -> tuple[discord.Embed, discord.File | None]:
+        """Returns (embed, file). If file is not None, it must be attached to
+        the same message via send(file=file) for the embed's image to render —
+        the embed references it internally as attachment://matchup.png.
+        Pass include_image=False to skip the logo fetch/composite entirely
+        (e.g. when only refreshing text on an embed whose image is unchanged)."""
         home = self.teams[game["home"]]
         away = self.teams[game["away"]]
         home_owner_id = roster.get(game["home"], {}).get("user_id")
@@ -609,9 +687,21 @@ class Scheduling(commands.Cog):
             description=description,
             color=int(home["color"], 16) if home.get("color") else discord.Color.default(),
         )
-        logo = home.get("logoDark") or home.get("logo")
-        if logo:
-            embed.set_thumbnail(url=logo)
+
+        home_logo = home.get("logoDark") or home.get("logo")
+        away_logo = away.get("logoDark") or away.get("logo")
+
+        file = None
+        if include_image and home_logo and away_logo:
+            file = await build_matchup_file(home_logo, away_logo)
+
+        if include_image:
+            if file is not None:
+                embed.set_image(url="attachment://matchup.png")
+            elif home_logo:
+                # Composite failed (network hiccup, bad URL, etc.) — fall back to
+                # the original single-team thumbnail rather than no image at all.
+                embed.set_thumbnail(url=home_logo)
 
         footer_text = f"Week {week}"
         if deadline:
@@ -619,7 +709,7 @@ class Scheduling(commands.Cog):
         if game.get("status") == "completed":
             footer_text += "  •  ✅ Completed"
         embed.set_footer(text=footer_text)
-        return embed
+        return embed, file
 
     async def handle_team_vacated(self, abbr: str):
         """If the vacated team has a game in the currently active week, clean
@@ -668,9 +758,12 @@ class Scheduling(commands.Cog):
                 g["message_id"] = None
 
                 if cpu_channel:
-                    embed = self.build_game_embed(g, current_week, roster)
+                    embed, file = await self.build_game_embed(g, current_week, roster)
                     view = CompleteGameView(cog=self, game_id=g["game_id"])
-                    new_msg = await cpu_channel.send(embed=embed, view=view, allowed_mentions=discord.AllowedMentions.none())
+                    send_kwargs = {"embed": embed, "view": view, "allowed_mentions": discord.AllowedMentions.none()}
+                    if file is not None:
+                        send_kwargs["file"] = file
+                    new_msg = await cpu_channel.send(**send_kwargs)
                     g["message_id"] = new_msg.id
 
                 changed = True
@@ -680,8 +773,11 @@ class Scheduling(commands.Cog):
                 if cpu_channel:
                     try:
                         msg = await cpu_channel.fetch_message(g["message_id"])
-                        embed = self.build_game_embed(g, current_week, roster)
-                        await msg.edit(embed=embed)
+                        embed, file = await self.build_game_embed(g, current_week, roster)
+                        edit_kwargs = {"embed": embed}
+                        if file is not None:
+                            edit_kwargs["attachments"] = [file]
+                        await msg.edit(**edit_kwargs)
                     except (discord.NotFound, discord.HTTPException):
                         pass
                 changed = True
