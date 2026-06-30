@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -96,8 +98,6 @@ COVERAGE_TYPE_OPTIONS = [
     ("Zone (C3, Tampa 2, C4 Drop, Zone Blitz)", "Zone Coverage"),
     ("Match (C4, C3 Seam, C6, C9, C2 Sink)", "Match Coverage"),
 ]
-PRESSURE_OPTIONS = [(p, p) for p in ["Bring Pressure/Blitz", "Rush Four/Play Coverage"]]
-
 PRESSURE_TYPES = [
     ("Stunts & Games (TEX, ET, Pirate, etc)", "Stunts & Games"),
     ("Interior Blitzes (A-Gap, Cross Dog, Mug)", "Interior Blitzes"),
@@ -120,7 +120,7 @@ OFFENSE_STEP_NAMES = [
     "Personnel Groupings", "Core Run Concepts",
     "Quick Game Pass Concepts", "Intermediate Pass Concepts", "Deep Pass Concepts",
 ]
-DEFENSE_STEP_NAMES = ["Scheme", "Coverage Shell", "Coverage Type", "Pressure", "Base Coverages", "Pressures"]
+DEFENSE_STEP_NAMES = ["Scheme", "Coverage Shell", "Coverage Type", "Base Coverages", "Pressures"]
 
 
 def build_scheme_card_embed(team_info: dict, card: dict) -> discord.Embed:
@@ -153,13 +153,15 @@ def build_scheme_card_embed(team_info: dict, card: dict) -> discord.Embed:
 
     defense = card.get("defense")
     if defense:
-        lines = [f"**Scheme:** {defense['scheme']}  \u2022  **Coaching Tree:** {defense['coaching_tree']}"]
-        lines.append(f"**Shell:** {defense['coverage_shell']}  \u2022  **Identity:** {defense['coverage_type']}")
+        lines = [f"**Scheme:** {defense['scheme']}  \u2022  **Identity:** {defense['coverage_type']}"]
+        lines.append(f"**Coaching Tree:** {defense['coaching_tree']}  \u2022  **Shell:** {defense['coverage_shell']}")
         lines.append(f"**Base Coverages:** {defense['base_coverages']}")
-        lines.append(f"**Pressure:** {defense['pressure']}")
         lines.append(f"**Pressures:** {defense['pressures']}")
         lines.append(f"**Summary:** {defense['summary']}")
         embed.add_field(name="DEFENSE", value="\n".join(lines), inline=False)
+
+    if card.get("last_updated"):
+        embed.set_footer(text=f"Last updated: {card['last_updated']}")
 
     return embed
 
@@ -351,6 +353,7 @@ class OffenseWizard:
         card = cards.setdefault(self.abbr, {})
         card["offense"] = self.data
         card["submitted_by"] = true_display_name(interaction.user)
+        card["last_updated"] = datetime.now(timezone.utc).strftime("%B %d, %Y")
         save_scheme_cards(cards)
 
         await interaction.response.edit_message(
@@ -367,7 +370,6 @@ class DefenseWizard:
         ("scheme", DEFENSE_SCHEME_OPTIONS),
         ("coverage_shell", COVERAGE_SHELL_OPTIONS),
         ("coverage_type", COVERAGE_TYPE_OPTIONS),
-        ("pressure", PRESSURE_OPTIONS),
     ]
 
     def __init__(self, cog: "SchemeCards", abbr: str, base_data: dict):
@@ -404,7 +406,7 @@ class DefenseWizard:
             self._after_base_coverages,
         )
         await interaction.response.edit_message(
-            content="**(Part 2 of 2) Step 5/6 — Select up to 4 Base Coverages**, then confirm:",
+            content="**(Part 2 of 2) Step 4/5 — Select up to 4 Base Coverages**, then confirm:",
             view=view,
         )
 
@@ -418,7 +420,7 @@ class DefenseWizard:
             self._after_pressures,
         )
         await interaction.response.edit_message(
-            content=f"**(Part 2 of 2) Step 6/6 — Select your top pressures** "
+            content=f"**(Part 2 of 2) Step 5/5 — Select your top pressures** "
             f"(up to {PRESSURE_TYPES_MAX_SELECT}, then confirm):",
             view=view,
         )
@@ -430,6 +432,7 @@ class DefenseWizard:
         card = cards.setdefault(self.abbr, {})
         card["defense"] = self.data
         card["submitted_by"] = true_display_name(interaction.user)
+        card["last_updated"] = datetime.now(timezone.utc).strftime("%B %d, %Y")
         save_scheme_cards(cards)
 
         await interaction.response.edit_message(
