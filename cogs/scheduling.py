@@ -13,6 +13,7 @@ from utils.data import (
     save_season,
     load_settings,
     save_settings,
+    load_scheme_cards,
     archive_dynasty,
     is_admin,
     resolve_team,
@@ -58,7 +59,7 @@ def deadline_preview() -> str:
     return "\n".join(lines)
 
 
-def build_dashboard_embed(season: dict, roster: dict) -> discord.Embed:
+def build_dashboard_embed(season: dict, roster: dict, scheme_cards: dict) -> discord.Embed:
     year = season.get("year") or "Not set yet"
     current_stage = season.get("current_stage", "preseason")
     stage = PHASE_DISPLAY.get(current_stage, current_stage)
@@ -66,11 +67,18 @@ def build_dashboard_embed(season: dict, roster: dict) -> discord.Embed:
     week_text = f"Week {current_week}" if current_week is not None else "No active week"
     claimed_count = len(roster)
 
+    # "Submitted" = both offense and defense halves are filled in for that team
+    submitted_count = sum(
+        1 for card in scheme_cards.values()
+        if card.get("offense") and card.get("defense")
+    )
+
     embed = discord.Embed(title="🏈 League Status", color=discord.Color.blurple())
     embed.add_field(name="Dynasty Year", value=str(year), inline=True)
     embed.add_field(name="Stage", value=stage, inline=True)
     embed.add_field(name="Current Week", value=week_text, inline=True)
     embed.add_field(name="Teams Claimed", value=f"{claimed_count}/32", inline=True)
+    embed.add_field(name="Scheme Cards Submitted", value=f"{submitted_count}/{claimed_count}", inline=True)
     return embed
 
 
@@ -88,7 +96,8 @@ async def refresh_dashboard(bot: commands.Bot):
 
     season = load_season()
     roster = load_roster()
-    embed = build_dashboard_embed(season, roster)
+    scheme_cards = load_scheme_cards()
+    embed = build_dashboard_embed(season, roster, scheme_cards)
 
     message_id = settings.get("dashboard_message_id")
     message = None
