@@ -134,36 +134,92 @@ def build_scheme_card_embed(team_info: dict, card: dict) -> discord.Embed:
 
     offense = card.get("offense")
     if offense and offense.get("personnel"):
-        header_line = f"**Coach:** {offense['coach']}"
+        header_line = f"**Coach:** {offense.get('coach', 'Unknown')}"
         if offense.get("film"):
             header_line += f"  \u2022  **Stream Link:** {offense['film']}"
         embed.description = header_line
 
-        lines = [f"**Scheme:** {offense['scheme']}  \u2022  **Coaching Tree:** {offense['coaching_tree']}"]
-        lines.append(f"**Playbook Type:** {offense['playbook_type']}  \u2022  **Base Playbook:** {offense['base_playbook']}")
-        lines.append(f"**Personnel:** {offense['personnel']}")
-        lines.append(f"**Tendency:** {offense['run_pass']}")
-        lines.append(f"**Core Run Concepts:** {offense['core_run_concepts']}")
-        lines.append(f"**Quick Pass:** {offense['pass_quick_game']}")
-        lines.append(f"**Intermediate Pass:** {offense['pass_intermediate']}")
-        lines.append(f"**Deep Pass:** {offense['pass_deep']}")
-        lines.append(f"**Tempo:** {offense['tempo']}")
-        lines.append(f"**Summary:** {offense['summary']}")
+        lines = [f"**Scheme:** {offense.get('scheme', 'Not set')}  \u2022  **Coaching Tree:** {offense.get('coaching_tree', 'Not set')}"]
+        lines.append(f"**Playbook Type:** {offense.get('playbook_type', 'Not set')}  \u2022  **Base Playbook:** {offense.get('base_playbook', 'Not set')}")
+        lines.append(f"**Personnel:** {offense.get('personnel', 'Not set')}")
+        lines.append(f"**Tendency:** {offense.get('run_pass', 'Not set')}")
+        lines.append(f"**Core Run Concepts:** {offense.get('core_run_concepts', 'Not set')}")
+        lines.append(f"**Quick Pass:** {offense.get('pass_quick_game', 'Not set')}")
+        lines.append(f"**Intermediate Pass:** {offense.get('pass_intermediate', 'Not set')}")
+        lines.append(f"**Deep Pass:** {offense.get('pass_deep', 'Not set')}")
+        lines.append(f"**Tempo:** {offense.get('tempo', 'Not set')}")
+        lines.append(f"**Summary:** {offense.get('summary', 'Not set')}")
         embed.add_field(name="OFFENSE", value="\n".join(lines), inline=False)
 
     defense = card.get("defense")
     if defense:
-        lines = [f"**Scheme:** {defense['scheme']}  \u2022  **Identity:** {defense['coverage_type']}"]
-        lines.append(f"**Coaching Tree:** {defense['coaching_tree']}  \u2022  **Shell:** {defense['coverage_shell']}")
-        lines.append(f"**Base Coverages:** {defense['base_coverages']}")
-        lines.append(f"**Pressures:** {defense['pressures']}")
-        lines.append(f"**Summary:** {defense['summary']}")
+        lines = [f"**Scheme:** {defense.get('scheme', 'Not set')}  \u2022  **Identity:** {defense.get('coverage_type', 'Not set')}"]
+        lines.append(f"**Coaching Tree:** {defense.get('coaching_tree', 'Not set')}  \u2022  **Shell:** {defense.get('coverage_shell', 'Not set')}")
+        lines.append(f"**Base Coverages:** {defense.get('base_coverages', 'Not set \u2014 resubmit with /set_defense_scheme')}")
+        lines.append(f"**Pressures:** {defense.get('pressures', 'Not set \u2014 resubmit with /set_defense_scheme')}")
+        lines.append(f"**Summary:** {defense.get('summary', 'Not set')}")
         embed.add_field(name="DEFENSE", value="\n".join(lines), inline=False)
 
     if card.get("last_updated"):
         embed.set_footer(text=f"Last updated: {card['last_updated']}")
 
     return embed
+
+
+def build_compact_scheme_card_embed(team_info: dict, card: dict) -> discord.Embed:
+    """Short summary version shown in the scheme cards channel — full detail
+    is only shown when the View Full Scheme Card button is clicked."""
+    embed = discord.Embed(
+        title=team_info["name"],
+        color=int(team_info["color"], 16) if team_info.get("color") else discord.Color.default(),
+    )
+    logo = team_info.get("logoDark") or team_info.get("logo")
+    if logo:
+        embed.set_thumbnail(url=logo)
+
+    offense = card.get("offense")
+    defense = card.get("defense")
+
+    summary_parts = []
+    if offense and offense.get("scheme"):
+        summary_parts.append(f"🏈 {offense['scheme']}")
+    if defense and defense.get("scheme"):
+        summary_parts.append(f"🛡️ {defense['scheme']}")
+
+    embed.description = "  •  ".join(summary_parts) if summary_parts else "No scheme set yet"
+
+    if card.get("last_updated"):
+        embed.set_footer(text=f"Last updated: {card['last_updated']}")
+
+    return embed
+
+
+class ExpandSchemeCardView(discord.ui.View):
+    """Persistent button that sends the full scheme card privately to
+    whoever clicks it, keeping the channel itself compact."""
+
+    def __init__(self, cog: "SchemeCards", abbr: str):
+        super().__init__(timeout=None)
+        self.cog = cog
+        self.abbr = abbr
+
+        button = discord.ui.Button(
+            label="View Full Scheme Card",
+            style=discord.ButtonStyle.primary,
+            custom_id=f"expand_scheme:{abbr}",
+        )
+        button.callback = self._on_click
+        self.add_item(button)
+
+    async def _on_click(self, interaction: discord.Interaction):
+        cards = load_scheme_cards()
+        card = cards.get(self.abbr)
+        if not card or (not card.get("offense") and not card.get("defense")):
+            await interaction.response.send_message("No scheme card set yet for this team.", ephemeral=True)
+            return
+
+        embed = build_scheme_card_embed(self.cog.teams[self.abbr], card)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 def build_step_prompt(step_names: list[str], index: int, label: str) -> str:
@@ -489,6 +545,19 @@ class SchemeCards(commands.Cog):
         self.bot = bot
         self.teams = load_teams()
 
+    def register_active_views(self):
+        """Re-registers persistent ExpandSchemeCardView buttons for every team
+        with a saved card. Must be called once after the bot logs in, since
+        persistent views don't survive a restart on their own."""
+        cards = load_scheme_cards()
+        for abbr, card in cards.items():
+            if not card.get("offense") and not card.get("defense"):
+                continue
+            if abbr not in self.teams:
+                continue
+            view = ExpandSchemeCardView(cog=self, abbr=abbr)
+            self.bot.add_view(view)
+
     async def team_autocomplete(self, interaction: discord.Interaction, current: str):
         current_lower = current.lower()
         matches = [
@@ -514,8 +583,9 @@ class SchemeCards(commands.Cog):
             card = cards[abbr]
             if not card.get("offense") and not card.get("defense"):
                 continue
-            embed = build_scheme_card_embed(self.teams[abbr], card)
-            await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+            embed = build_compact_scheme_card_embed(self.teams[abbr], card)
+            view = ExpandSchemeCardView(cog=self, abbr=abbr)
+            await channel.send(embed=embed, view=view, allowed_mentions=discord.AllowedMentions.none())
 
     def resolve_owned_team(self, interaction: discord.Interaction, roster: dict):
         owned = [a for a, info in roster.items() if info.get("user_id") == interaction.user.id]

@@ -24,6 +24,16 @@ class MLGBot(commands.Bot):
             await self.load_extension(cog)
             print(f"Loaded cog: {cog}")
 
+        scheduling_cog = self.get_cog("Scheduling")
+        if scheduling_cog is not None:
+            scheduling_cog.register_active_views()
+            print("Registered persistent views for active CPU games.")
+
+        scheme_cards_cog = self.get_cog("SchemeCards")
+        if scheme_cards_cog is not None:
+            scheme_cards_cog.register_active_views()
+            print("Registered persistent views for scheme cards.")
+
         guild = discord.Object(id=GUILD_ID)
 
         # Copy the currently-registered global commands into the guild bucket
