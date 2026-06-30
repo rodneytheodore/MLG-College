@@ -324,7 +324,8 @@ async def _do_advance_week(
             await cpu_channel.send(f"📅 **All CPU games due:** {cpu_deadline}")
         for g in cpu_games:
             embed = cog.build_game_embed(g, week, roster)
-            cpu_msg = await cpu_channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+            view = CompleteGameView(cog=cog, game_id=g["game_id"])
+            cpu_msg = await cpu_channel.send(embed=embed, view=view, allowed_mentions=discord.AllowedMentions.none())
             g["message_id"] = cpu_msg.id
     else:
         await cpu_channel.send("No CPU games this week.")
@@ -506,12 +507,86 @@ def resolve_target_week(season: dict, target: str) -> tuple[int, str]:
         return week, f"Week {week} (next)"
 
 
+def find_game_by_id(season: dict, game_id: str):
+    """Searches all weeks for a game with this ID. Returns (week_number, game_dict) or (None, None)."""
+    for week_key, week_data in season.get("weeks", {}).items():
+        for g in week_data.get("games", []):
+            if g["game_id"] == game_id:
+                return int(week_key), g
+    return None, None
+
+
+class CompleteGameView(discord.ui.View):
+    """Persistent button for marking a CPU game complete. Survives bot
+    restarts since it's registered with a stable custom_id and timeout=None."""
+
+    def __init__(self, cog: "Scheduling", game_id: str, completed: bool = False):
+        super().__init__(timeout=None)
+        self.cog = cog
+        self.game_id = game_id
+
+        button = discord.ui.Button(
+            label="✅ Completed" if completed else "Mark Completed",
+            style=discord.ButtonStyle.success if completed else discord.ButtonStyle.secondary,
+            disabled=completed,
+            custom_id=f"complete_game:{game_id}",
+        )
+        button.callback = self._on_click
+        self.add_item(button)
+
+    async def _on_click(self, interaction: discord.Interaction):
+        season = load_season()
+        week, game = find_game_by_id(season, self.game_id)
+        if game is None:
+            await interaction.response.send_message("Couldn't find this game anymore.", ephemeral=True)
+            return
+
+        roster = load_roster()
+        home_owner_id = roster.get(game["home"], {}).get("user_id")
+        away_owner_id = roster.get(game["away"], {}).get("user_id")
+        authorized = is_admin(interaction) or interaction.user.id in (home_owner_id, away_owner_id)
+
+        if not authorized:
+            await interaction.response.send_message(
+                "Only an admin or one of the teams' owners can mark this complete.", ephemeral=True
+            )
+            return
+
+        game["status"] = "completed"
+        save_season(season)
+
+        embed = self.cog.build_game_embed(game, week, roster)
+        new_view = CompleteGameView(cog=self.cog, game_id=self.game_id, completed=True)
+        await interaction.response.edit_message(embed=embed, view=new_view)
+
+
 class Scheduling(commands.Cog):
     """Season/dynasty lifecycle and weekly scheduling commands."""
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.teams = load_teams()
+
+    def register_active_views(self):
+        """Re-registers persistent CompleteGameView buttons for every CPU game
+        in the currently active week that isn't marked completed yet. Must be
+        called once after the bot logs in, since persistent views don't
+        survive a restart on their own."""
+        season = load_season()
+        current_week = season.get("current_week")
+        if current_week is None:
+            return
+
+        week_data = season.get("weeks", {}).get(str(current_week))
+        if not week_data or week_data.get("status") != "active":
+            return
+
+        for g in week_data.get("games", []):
+            if g["type"] != "cpu":
+                continue
+            completed = g.get("status") == "completed"
+            view = CompleteGameView(cog=self, game_id=g["game_id"], completed=completed)
+            self.bot.add_view(view)
 
     def build_game_embed(self, game: dict, week: int, roster: dict, deadline: str | None = None) -> discord.Embed:
         home = self.teams[game["home"]]
@@ -541,6 +616,8 @@ class Scheduling(commands.Cog):
         footer_text = f"Week {week}"
         if deadline:
             footer_text += f"  •  Due: {deadline}"
+        if game.get("status") == "completed":
+            footer_text += "  •  ✅ Completed"
         embed.set_footer(text=footer_text)
         return embed
 
@@ -592,7 +669,8 @@ class Scheduling(commands.Cog):
 
                 if cpu_channel:
                     embed = self.build_game_embed(g, current_week, roster)
-                    new_msg = await cpu_channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+                    view = CompleteGameView(cog=self, game_id=g["game_id"])
+                    new_msg = await cpu_channel.send(embed=embed, view=view, allowed_mentions=discord.AllowedMentions.none())
                     g["message_id"] = new_msg.id
 
                 changed = True
