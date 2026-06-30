@@ -318,11 +318,12 @@ async def _do_advance_week(
     cpu_games = [g for g in week_data["games"] if g["type"] == "cpu"]
 
     deadline_line = f"\n**Due:** {deadline}" if deadline else ""
-    cpu_deadline_line = f"\n**Due:** {cpu_deadline}" if cpu_deadline else ""
 
     if cpu_games:
+        if cpu_deadline:
+            await cpu_channel.send(f"📅 **All CPU games due:** {cpu_deadline}")
         for g in cpu_games:
-            embed = cog.build_game_embed(g, week, roster, deadline=cpu_deadline)
+            embed = cog.build_game_embed(g, week, roster)
             cpu_msg = await cpu_channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
             g["message_id"] = cpu_msg.id
     else:
@@ -542,6 +543,73 @@ class Scheduling(commands.Cog):
             footer_text += f"  •  Due: {deadline}"
         embed.set_footer(text=footer_text)
         return embed
+
+    async def handle_team_vacated(self, abbr: str):
+        """If the vacated team has a game in the currently active week, clean
+        up the stale embed/thread. A user game with one side now unowned
+        becomes a CPU game (old embed+thread removed, reposted in cpu-games).
+        A CPU game just gets its embed text refreshed in place."""
+        season = load_season()
+        current_week = season.get("current_week")
+        if current_week is None:
+            return
+
+        week_key = str(current_week)
+        week_data = season.get("weeks", {}).get(week_key)
+        if not week_data or week_data.get("status") != "active":
+            return
+
+        roster = load_roster()
+        changed = False
+
+        for g in week_data.get("games", []):
+            if abbr not in (g["home"], g["away"]):
+                continue
+
+            new_type = classify_game(g["home"], g["away"], roster)
+
+            if g["type"] == "user" and new_type == "cpu":
+                user_channel = self.bot.get_channel(week_data.get("user_channel_id"))
+                cpu_channel = self.bot.get_channel(week_data.get("cpu_channel_id"))
+
+                if g.get("thread_id"):
+                    try:
+                        thread = self.bot.get_channel(g["thread_id"]) or await self.bot.fetch_channel(g["thread_id"])
+                        await thread.delete()
+                    except (discord.NotFound, discord.HTTPException):
+                        pass
+
+                if user_channel and g.get("message_id"):
+                    try:
+                        old_msg = await user_channel.fetch_message(g["message_id"])
+                        await old_msg.delete()
+                    except (discord.NotFound, discord.HTTPException):
+                        pass
+
+                g["type"] = "cpu"
+                g["thread_id"] = None
+                g["message_id"] = None
+
+                if cpu_channel:
+                    embed = self.build_game_embed(g, current_week, roster)
+                    new_msg = await cpu_channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+                    g["message_id"] = new_msg.id
+
+                changed = True
+
+            elif g["type"] == "cpu" and g.get("message_id"):
+                cpu_channel = self.bot.get_channel(week_data.get("cpu_channel_id"))
+                if cpu_channel:
+                    try:
+                        msg = await cpu_channel.fetch_message(g["message_id"])
+                        embed = self.build_game_embed(g, current_week, roster)
+                        await msg.edit(embed=embed)
+                    except (discord.NotFound, discord.HTTPException):
+                        pass
+                changed = True
+
+        if changed:
+            save_season(season)
 
     async def team_autocomplete(self, interaction: discord.Interaction, current: str):
         current_lower = current.lower()

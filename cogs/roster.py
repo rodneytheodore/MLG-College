@@ -144,6 +144,10 @@ class Roster(commands.Cog):
         await self.refresh_roster_channel()
         await refresh_dashboard(self.bot)
 
+        scheduling_cog = interaction.client.get_cog("Scheduling")
+        if scheduling_cog is not None:
+            await scheduling_cog.handle_team_vacated(abbr)
+
     async def team_name_autocomplete(self, interaction: discord.Interaction, current: str):
         current_lower = current.lower()
         matches = [
@@ -167,12 +171,18 @@ class Roster(commands.Cog):
             return
 
         roster = load_roster()
+        vacated_abbrs = list(roster.keys())
         count = len(roster)
         save_roster({})
 
         await send_ephemeral(interaction, f"Vacated all {count} claimed team(s). Roster is now empty.")
         await self.refresh_roster_channel()
         await refresh_dashboard(self.bot)
+
+        scheduling_cog = interaction.client.get_cog("Scheduling")
+        if scheduling_cog is not None:
+            for abbr in vacated_abbrs:
+                await scheduling_cog.handle_team_vacated(abbr)
 
 
 async def setup(bot: commands.Bot):
