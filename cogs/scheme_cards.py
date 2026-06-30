@@ -18,6 +18,70 @@ from utils.data import (
 from utils.responses import send_ephemeral
 
 
+PERSONNEL_GROUPINGS = [
+    "11 — 1 RB 1 TE",
+    "12 — 1 RB 2 TE",
+    "21 — 2 RB 1 TE",
+    "22 — 2 RB 2 TE",
+    "10 — 1 RB 0 TE",
+    "20 — 2 RB 0 TE",
+    "13 — 1 RB 3 TE",
+]
+
+
+class PersonnelGroupingsView(discord.ui.View):
+    """Toggle buttons for selecting multiple personnel groupings, then confirm to save."""
+
+    def __init__(self, cog: "SchemeCards", abbr: str, offense_data: dict):
+        super().__init__(timeout=120)
+        self.cog = cog
+        self.abbr = abbr
+        self.offense_data = offense_data
+        self.selected: set[str] = set()
+
+        for grouping in PERSONNEL_GROUPINGS:
+            btn = discord.ui.Button(label=grouping, style=discord.ButtonStyle.secondary)
+            btn.callback = self._make_toggle_callback(grouping, btn)
+            self.add_item(btn)
+
+        confirm_btn = discord.ui.Button(label="Confirm Selection", style=discord.ButtonStyle.success, row=4)
+        confirm_btn.callback = self.confirm
+        self.add_item(confirm_btn)
+
+    def _make_toggle_callback(self, grouping: str, button: discord.ui.Button):
+        async def callback(interaction: discord.Interaction):
+            if grouping in self.selected:
+                self.selected.discard(grouping)
+                button.style = discord.ButtonStyle.secondary
+            else:
+                self.selected.add(grouping)
+                button.style = discord.ButtonStyle.primary
+            await interaction.response.edit_message(view=self)
+        return callback
+
+    async def confirm(self, interaction: discord.Interaction):
+        if not self.selected:
+            await interaction.response.send_message(
+                "Select at least one personnel grouping first.", ephemeral=True
+            )
+            return
+
+        cards = load_scheme_cards()
+        card = cards.setdefault(self.abbr, {})
+        self.offense_data["personnel"] = ", ".join(sorted(self.selected, key=PERSONNEL_GROUPINGS.index))
+        card["offense"] = self.offense_data
+        card["submitted_by"] = true_display_name(interaction.user)
+        save_scheme_cards(cards)
+
+        for child in self.children:
+            child.disabled = True
+        await interaction.response.edit_message(
+            content=f"Personnel groupings saved: {self.offense_data['personnel']}", view=self
+        )
+
+        await self.cog.refresh_scheme_cards_channel()
+
+
 def can_edit_card(interaction: discord.Interaction, team_abbr: str, roster: dict) -> bool:
     if is_admin(interaction):
         return True
@@ -35,14 +99,16 @@ def build_scheme_card_embed(team_info: dict, card: dict) -> discord.Embed:
         embed.set_thumbnail(url=logo)
 
     offense = card.get("offense")
-    if offense:
+    if offense and offense.get("personnel"):
         header_line = f"**Coach:** {offense['coach']}"
         if offense.get("film"):
             header_line += f"  \u2022  **Stream Link:** {offense['film']}"
         embed.description = header_line
 
         lines = [f"**Scheme:** {offense['scheme']}  \u2022  **Coaching Tree:** {offense['coaching_tree']}"]
-        lines.append(f"**Personnel:** {offense['personnel']}  \u2022  **Tempo:** {offense['tempo']}")
+        lines.append(f"**Personnel:** {offense['personnel']}")
+        lines.append(f"**Tempo:** {offense['tempo']}")
+        lines.append(f"**Playbook Type:** {offense['playbook_type']}  \u2022  **Base Playbook:** {offense['base_playbook']}")
         lines.append(f"**Summary:** {offense['summary']}")
         embed.add_field(name="OFFENSE", value="\n".join(lines), inline=False)
 
@@ -111,22 +177,26 @@ class SchemeCards(commands.Cog):
     @app_commands.describe(
         scheme="Offensive scheme",
         coaching_tree="Coaching Tree (1 or 2 coaches)",
-        personnel="Personnel grouping",
         tempo="Tempo/philosophy",
+        playbook_type="Playbook type",
+        base_playbook="Base playbook (e.g. Air Raid, West Coast)",
         summary="Short summary of your offensive approach",
         film="Stream link (Twitch, YouTube, etc.)",
     )
-    @app_commands.choices(personnel=[
-        app_commands.Choice(name="Traditional (Base 21/12 Personnel)", value="Traditional"),
-        app_commands.Choice(name="Modern (3 WR most of time)", value="Modern"),
-        app_commands.Choice(name="Spread (Use if Air Raid, Run and Shoot, or Spread)", value="Spread"),
-    ])
+    @app_commands.choices(
+        playbook_type=[
+            app_commands.Choice(name="Stock", value="Stock"),
+            app_commands.Choice(name="Custom (<5 Formation Difference)", value="Custom"),
+            app_commands.Choice(name="Full Custom (>=5 Formation Difference)", value="Full Custom"),
+        ],
+    )
     async def set_offense_scheme(
         self, interaction: discord.Interaction,
         scheme: Literal["Air Raid", "Spread", "Spread Option", "Option", "Pro Style", "Power Spread", "Pistol", "Multiple"],
         coaching_tree: str,
-        personnel: str,
         tempo: Literal["Ball Control", "No Huddle", "Turbo"],
+        playbook_type: str,
+        base_playbook: str,
         summary: str,
         film: str,
     ):
@@ -138,22 +208,24 @@ class SchemeCards(commands.Cog):
 
         coach = true_display_name(interaction.user)
 
-        cards = load_scheme_cards()
-        card = cards.setdefault(abbr, {})
-        card["offense"] = {
+        offense_data = {
             "coach": coach,
             "scheme": scheme,
             "coaching_tree": coaching_tree,
-            "personnel": personnel,
+            "personnel": None,  # filled in by the button selection below
             "tempo": tempo,
+            "playbook_type": playbook_type,
+            "base_playbook": base_playbook,
             "film": film,
             "summary": summary,
         }
-        card["submitted_by"] = true_display_name(interaction.user)
-        save_scheme_cards(cards)
 
-        await send_ephemeral(interaction, f"Offense scheme saved for **{self.teams[abbr]['name']}**.")
-        await self.refresh_scheme_cards_channel()
+        view = PersonnelGroupingsView(cog=self, abbr=abbr, offense_data=offense_data)
+        await interaction.response.send_message(
+            "Select your primary personnel groupings — check all that apply, then confirm.",
+            view=view,
+            ephemeral=True,
+        )
 
     @app_commands.command(name="set_defense_scheme", description="Set your team's defensive scheme card")
     @app_commands.describe(
