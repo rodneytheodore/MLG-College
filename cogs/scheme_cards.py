@@ -154,6 +154,8 @@ def _build_offense_install_embed(team_info: dict, install: dict) -> discord.Embe
     embed.add_field(name="Quick Pass", value=fmt(install.get("quick_pass", [])), inline=True)
     embed.add_field(name="Intermediate Pass", value=fmt(install.get("intermediate_pass", [])), inline=True)
     embed.add_field(name="Deep Pass", value=fmt(install.get("deep_pass", [])), inline=True)
+    if install.get("last_updated"):
+        embed.set_footer(text=f"Last updated: {install['last_updated']}")
     return embed
 
 
@@ -174,6 +176,8 @@ def _build_defense_install_embed(team_info: dict, install: dict) -> discord.Embe
     embed.add_field(name="\u200b", value="\u200b", inline=False)
     embed.add_field(name="Base Coverages", value=fmt(install.get("coverages", [])), inline=True)
     embed.add_field(name="Pressure Packages", value=fmt(install.get("pressures", [])), inline=True)
+    if install.get("last_updated"):
+        embed.set_footer(text=f"Last updated: {install['last_updated']}")
     return embed
 
 

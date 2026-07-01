@@ -112,6 +112,7 @@ class DefenseInstallConfirmView(discord.ui.View):
             "sub_packages": self.sub_packages,
             "coverages": self.coverages,
             "pressures": self.pressures,
+            "last_updated": submitted,
         }
         save_defense_installs(installs)
 

@@ -276,6 +276,9 @@ class InstallOffenseModal3(discord.ui.Modal, title="Base Formations (3 of 3)"):
 
 
 async def _save_and_show(interaction: discord.Interaction, abbr: str, data: dict):
+    submitted = datetime.now(timezone.utc).strftime("%B %d, %Y")
+    data["last_updated"] = submitted
+
     installs = load_offense_installs()
     installs[abbr] = data
     save_offense_installs(installs)
@@ -284,7 +287,6 @@ async def _save_and_show(interaction: discord.Interaction, abbr: str, data: dict
     team = teams.get(abbr, {})
     team_color = int(team.get("color", "C9A227"), 16)
     team_name = team.get("name", abbr)
-    submitted = datetime.now(timezone.utc).strftime("%B %d, %Y")
 
     formations = data.get("formations", [])
     formation_val = "\n".join(f"`{i+1:02d}` {f}" for i, f in enumerate(formations))
