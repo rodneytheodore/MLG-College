@@ -148,6 +148,22 @@ class DefenseInstallConfirmView(discord.ui.View):
         await interaction.response.edit_message(content="Cancelled. Nothing was saved.", view=self)
 
 
+# ---- Continue button (bridges modal → modal since Discord forbids modal → modal) ----
+
+class _ContinueView(discord.ui.View):
+    """Ephemeral 'Continue' button used between chained modals."""
+
+    def __init__(self, label: str, on_click):
+        super().__init__(timeout=300)
+        self._on_click = on_click
+        btn = discord.ui.Button(label=label, style=discord.ButtonStyle.primary)
+        btn.callback = self._handle
+        self.add_item(btn)
+
+    async def _handle(self, interaction: discord.Interaction):
+        await self._on_click(interaction)
+
+
 # ---- Modals ----
 
 class InstallDefenseModal1(discord.ui.Modal, title="Base Formations"):
@@ -166,7 +182,15 @@ class InstallDefenseModal1(discord.ui.Modal, title="Base Formations"):
             self.f01.value.strip(), self.f02.value.strip(),
             self.f03.value.strip(), self.f04.value.strip(), self.f05.value.strip(),
         ]
-        await interaction.response.send_modal(InstallDefenseModal2(self.abbr, formations))
+        abbr = self.abbr
+
+        async def on_continue(interaction: discord.Interaction):
+            await interaction.response.send_modal(InstallDefenseModal2(abbr, formations))
+
+        view = _ContinueView("Continue → Sub Packages 01–05", on_continue)
+        await interaction.response.send_message(
+            "**Base Formations saved.** Click to continue:", view=view, ephemeral=True
+        )
 
 
 class InstallDefenseModal2(discord.ui.Modal, title="Sub Packages (1 of 2)"):
@@ -186,8 +210,15 @@ class InstallDefenseModal2(discord.ui.Modal, title="Sub Packages (1 of 2)"):
             self.s01.value.strip(), self.s02.value.strip(), self.s03.value.strip(),
             self.s04.value.strip(), self.s05.value.strip(),
         ]
-        await interaction.response.send_modal(
-            InstallDefenseModal3(self.abbr, self.formations, subs)
+        abbr = self.abbr
+        formations = self.formations
+
+        async def on_continue(interaction: discord.Interaction):
+            await interaction.response.send_modal(InstallDefenseModal3(abbr, formations, subs))
+
+        view = _ContinueView("Continue → Sub Packages 06–08", on_continue)
+        await interaction.response.send_message(
+            "**Sub Packages 01–05 saved.** Click to continue:", view=view, ephemeral=True
         )
 
 

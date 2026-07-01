@@ -121,6 +121,22 @@ class MultiSelectStepView(discord.ui.View):
         await self.on_confirm(interaction, ordered)
 
 
+# ---- Continue button (bridges modal → modal since Discord forbids modal → modal) ----
+
+class _ContinueView(discord.ui.View):
+    """Ephemeral 'Continue' button used between chained modals."""
+
+    def __init__(self, label: str, on_click):
+        super().__init__(timeout=300)
+        self._on_click = on_click
+        btn = discord.ui.Button(label=label, style=discord.ButtonStyle.primary)
+        btn.callback = self._handle
+        self.add_item(btn)
+
+    async def _handle(self, interaction: discord.Interaction):
+        await self._on_click(interaction)
+
+
 # ---- Modals ----
 
 class InstallOffenseModal1(discord.ui.Modal, title="Base Formations (1 of 3)"):
@@ -139,7 +155,15 @@ class InstallOffenseModal1(discord.ui.Modal, title="Base Formations (1 of 3)"):
             self.f01.value.strip(), self.f02.value.strip(), self.f03.value.strip(),
             self.f04.value.strip(), self.f05.value.strip(),
         ]
-        await interaction.response.send_modal(InstallOffenseModal2(self.abbr, batch))
+        abbr = self.abbr
+
+        async def on_continue(interaction: discord.Interaction):
+            await interaction.response.send_modal(InstallOffenseModal2(abbr, batch))
+
+        view = _ContinueView("Continue → Formations 06–10", on_continue)
+        await interaction.response.send_message(
+            "**Formations 01–05 saved.** Click to continue:", view=view, ephemeral=True
+        )
 
 
 class InstallOffenseModal2(discord.ui.Modal, title="Base Formations (2 of 3)"):
@@ -159,7 +183,16 @@ class InstallOffenseModal2(discord.ui.Modal, title="Base Formations (2 of 3)"):
             self.f06.value.strip(), self.f07.value.strip(), self.f08.value.strip(),
             self.f09.value.strip(), self.f10.value.strip(),
         ]
-        await interaction.response.send_modal(InstallOffenseModal3(self.abbr, self.prev + batch))
+        all_so_far = self.prev + batch
+        abbr = self.abbr
+
+        async def on_continue(interaction: discord.Interaction):
+            await interaction.response.send_modal(InstallOffenseModal3(abbr, all_so_far))
+
+        view = _ContinueView("Continue → Formations 11–14 (optional)", on_continue)
+        await interaction.response.send_message(
+            "**Formations 06–10 saved.** Click to continue:", view=view, ephemeral=True
+        )
 
 
 class InstallOffenseModal3(discord.ui.Modal, title="Base Formations (3 of 3)"):
