@@ -118,13 +118,13 @@ def build_compact_scheme_card_embed(team_info: dict, card: dict) -> discord.Embe
     offense = card.get("offense")
     defense = card.get("defense")
 
-    lines = [f"`{'User:':<9}{card.get('submitted_by', 'Unknown')}`"]
+    lines = [f"**User:** {card.get('submitted_by', 'Unknown')}"]
     if offense and offense.get("scheme"):
-        lines.append(f"`{'Offense:':<9}{offense['scheme']}`")
+        lines.append(f"**Offense:** {offense['scheme']}")
     if defense and defense.get("scheme"):
-        lines.append(f"`{'Defense:':<9}{defense['scheme']}`")
+        lines.append(f"**Defense:** {defense['scheme']}")
     if len(lines) == 1:
-        lines.append("`No scheme set yet`")
+        lines.append("No scheme set yet")
 
     embed.description = "\n".join(lines)
 
@@ -184,9 +184,8 @@ def _build_defense_install_embed(team_info: dict, install: dict) -> discord.Embe
 class ExpandSchemeCardView(discord.ui.View):
     """Persistent buttons on each scheme card post in the channel."""
 
-    def __init__(self, cog: "SchemeCards", abbr: str):
+    def __init__(self, abbr: str):
         super().__init__(timeout=None)
-        self.cog = cog
         self.abbr = abbr
 
         btn_scheme = discord.ui.Button(
@@ -222,7 +221,8 @@ class ExpandSchemeCardView(discord.ui.View):
         if not card or (not card.get("offense") and not card.get("defense")):
             await interaction.response.send_message("No scheme card set yet for this team.", ephemeral=True)
             return
-        embed = build_scheme_card_embed(self.cog.teams[self.abbr], card)
+        teams = load_teams()
+        embed = build_scheme_card_embed(teams[self.abbr], card)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     async def _on_offense_click(self, interaction: discord.Interaction):
@@ -232,7 +232,8 @@ class ExpandSchemeCardView(discord.ui.View):
         if not install:
             await interaction.response.send_message("No offensive install submitted yet.", ephemeral=True)
             return
-        embed = _build_offense_install_embed(self.cog.teams[self.abbr], install)
+        teams = load_teams()
+        embed = _build_offense_install_embed(teams.get(self.abbr, {}), install)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     async def _on_defense_click(self, interaction: discord.Interaction):
@@ -242,7 +243,8 @@ class ExpandSchemeCardView(discord.ui.View):
         if not install:
             await interaction.response.send_message("No defensive install submitted yet.", ephemeral=True)
             return
-        embed = _build_defense_install_embed(self.cog.teams[self.abbr], install)
+        teams = load_teams()
+        embed = _build_defense_install_embed(teams.get(self.abbr, {}), install)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
@@ -504,7 +506,7 @@ class SchemeCards(commands.Cog):
                 continue
             if abbr not in self.teams:
                 continue
-            view = ExpandSchemeCardView(cog=self, abbr=abbr)
+            view = ExpandSchemeCardView(abbr=abbr)
             self.bot.add_view(view)
 
     async def team_autocomplete(self, interaction: discord.Interaction, current: str):
@@ -533,7 +535,7 @@ class SchemeCards(commands.Cog):
             if not card.get("offense") and not card.get("defense"):
                 continue
             embed = build_compact_scheme_card_embed(self.teams[abbr], card)
-            view = ExpandSchemeCardView(cog=self, abbr=abbr)
+            view = ExpandSchemeCardView(abbr=abbr)
             await channel.send(embed=embed, view=view, allowed_mentions=discord.AllowedMentions.none())
 
     def resolve_owned_team(self, interaction: discord.Interaction, roster: dict):
