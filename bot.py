@@ -10,6 +10,7 @@ COGS = [
     "cogs.roster",
     "cogs.scheduling",
     "cogs.scheme_cards",
+    "cogs.install_offense",
 ]
 
 GUILD_ID = 1207738346424770631  # your server's ID, for instant command sync
@@ -28,11 +29,6 @@ class MLGBot(commands.Bot):
         if scheduling_cog is not None:
             scheduling_cog.register_active_views()
             print("Registered persistent views for active CPU games.")
-
-        scheme_cards_cog = self.get_cog("SchemeCards")
-        if scheme_cards_cog is not None:
-            scheme_cards_cog.register_active_views()
-            print("Registered persistent views for scheme cards.")
 
         guild = discord.Object(id=GUILD_ID)
 
