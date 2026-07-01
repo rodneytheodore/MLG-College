@@ -799,7 +799,7 @@ async def _do_advance_week(
             # Channel embed: no image, no buttons (clean matchup card only)
             embed, _ = await cog.build_game_embed(g, week, roster, deadline=deadline, mention_users=False, include_image=False)
             game_msg = await user_channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
-            thread = await game_msg.create_thread(name=f"{g['home']} vs {g['away']} — Week {week}")
+            thread = await game_msg.create_thread(name=f"{g['away']} vs {g['home']} — Week {week}")
             home_owner_id = roster.get(g["home"], {}).get("user_id")
             away_owner_id = roster.get(g["away"], {}).get("user_id")
 
@@ -812,7 +812,7 @@ async def _do_advance_week(
             # Buttons live in the thread alongside the ping
             game_view = CompleteGameView(cog=cog, game_id=g["game_id"], show_schedule_button=True)
             await thread.send(
-                f"<@{home_owner_id}> <@{away_owner_id}> use this thread to schedule your game and report completion.{deadline_line}",
+                f"<@{away_owner_id}> <@{home_owner_id}> use this thread to schedule your game and report completion.{deadline_line}",
                 view=game_view,
                 allowed_mentions=discord.AllowedMentions(users=True),
             )
@@ -1179,14 +1179,14 @@ class Scheduling(commands.Cog):
 
         if game["type"] == "user":
             if mention_users:
-                description = f"<@{home_owner_id}> vs <@{away_owner_id}>"
+                description = f"<@{away_owner_id}> vs <@{home_owner_id}>"
             else:
-                description = f"{home_username} vs {away_username}"
+                description = f"{away_username} vs {home_username}"
         else:
-            if home_owner_id:
-                description = f"<@{home_owner_id}> vs CPU"
-            elif away_owner_id:
-                description = f"CPU vs <@{away_owner_id}>"
+            if away_owner_id:
+                description = f"<@{away_owner_id}> vs CPU"
+            elif home_owner_id:
+                description = f"CPU vs <@{home_owner_id}>"
             else:
                 description = "CPU vs CPU"
 
@@ -1200,7 +1200,7 @@ class Scheduling(commands.Cog):
             color = discord.Color.default()
 
         embed = discord.Embed(
-            title=f"{home['name']} vs {away['name']}",
+            title=f"{away['name']} vs {home['name']}",
             description=description,
             color=color,
         )
@@ -1210,15 +1210,13 @@ class Scheduling(commands.Cog):
 
         file = None
         if include_image and home_logo and away_logo:
-            file = await build_matchup_file(home_logo, away_logo)
+            file = await build_matchup_file(away_logo, home_logo)  # away on left
 
         if include_image:
             if file is not None:
                 embed.set_image(url="attachment://matchup.png")
-            elif home_logo:
-                # Composite failed (network hiccup, bad URL, etc.) — fall back to
-                # the original single-team thumbnail rather than no image at all.
-                embed.set_thumbnail(url=home_logo)
+            elif away_logo:
+                embed.set_thumbnail(url=away_logo)
 
         footer_text = f"Week {week}"
         if deadline:
@@ -1317,14 +1315,14 @@ class Scheduling(commands.Cog):
     @app_commands.command(name="add_game", description="Add a matchup to a week (admin only)")
     @app_commands.describe(
         target="Which week to add this game to",
-        home="Home team",
         away="Away team",
+        home="Home team",
     )
     @app_commands.choices(target=[
         app_commands.Choice(name="Current Week", value="current"),
         app_commands.Choice(name="Next Week", value="next"),
     ])
-    async def add_game(self, interaction: discord.Interaction, target: str, home: str, away: str):
+    async def add_game(self, interaction: discord.Interaction, target: str, away: str, home: str):
         if not is_admin(interaction):
             await send_ephemeral(interaction, "Only admins can add games.")
             return
@@ -1386,8 +1384,8 @@ class Scheduling(commands.Cog):
 
         await send_ephemeral(
             interaction,
-            f"Added to **{week_label}**: {self.teams[home_abbr]['name']} vs "
-            f"{self.teams[away_abbr]['name']} ({game_type.upper()})\n"
+            f"Added to **{week_label}**: {self.teams[away_abbr]['name']} vs "
+            f"{self.teams[home_abbr]['name']} ({game_type.upper()})\n"
             f"Run `/view_week` to see the full staged list."
         )
 
@@ -1440,7 +1438,7 @@ class Scheduling(commands.Cog):
         current_lower = current.lower()
         choices = []
         for g in week_data.get("games", []):
-            label = f"{self.teams[g['home']]['name']} vs {self.teams[g['away']]['name']} ({g['type'].upper()})"
+            label = f"{self.teams[g['away']]['name']} vs {self.teams[g['home']]['name']} ({g['type'].upper()})"
             if current_lower in label.lower():
                 choices.append(app_commands.Choice(name=label, value=g["game_id"]))
         return choices[:25]
@@ -1465,7 +1463,7 @@ class Scheduling(commands.Cog):
         for g in week_data["games"]:
             home = self.teams[g["home"]]["name"]
             away = self.teams[g["away"]]["name"]
-            lines.append(f"- {home} vs {away} ({g['type'].upper()})")
+            lines.append(f"- {away} vs {home} ({g['type'].upper()})")
 
         await send_ephemeral(interaction, "\n".join(lines))
 
