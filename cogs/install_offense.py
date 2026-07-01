@@ -200,6 +200,7 @@ class InstallOffenseModal3(discord.ui.Modal, title="Base Formations (3 of 3)"):
     f12 = discord.ui.TextInput(label="12 (optional)", placeholder="Optional", required=False, max_length=60)
     f13 = discord.ui.TextInput(label="13 (optional)", placeholder="Optional", required=False, max_length=60)
     f14 = discord.ui.TextInput(label="14 (optional)", placeholder="Optional", required=False, max_length=60)
+    f15 = discord.ui.TextInput(label="15 (optional)", placeholder="Optional", required=False, max_length=60)
 
     def __init__(self, abbr: str, prev: list[str]):
         super().__init__()
@@ -208,8 +209,8 @@ class InstallOffenseModal3(discord.ui.Modal, title="Base Formations (3 of 3)"):
 
     async def on_submit(self, interaction: discord.Interaction):
         final_batch = [
-            self.f11.value.strip(), self.f12.value.strip(),
-            self.f13.value.strip(), self.f14.value.strip(),
+            self.f11.value.strip(), self.f12.value.strip(), self.f13.value.strip(),
+            self.f14.value.strip(), self.f15.value.strip(),
         ]
         all_formations = [f for f in (self.prev + final_batch) if f]
 
@@ -286,8 +287,7 @@ async def _save_and_show(interaction: discord.Interaction, abbr: str, data: dict
     submitted = datetime.now(timezone.utc).strftime("%B %d, %Y")
 
     formations = data.get("formations", [])
-    left_val = "\n".join(f"`{i+1:02d}` {f}" for i, f in enumerate(formations[:7]))
-    right_val = "\n".join(f"`{i+8:02d}` {f}" for i, f in enumerate(formations[7:])) or "\u200b"
+    formation_val = "\n".join(f"`{i+1:02d}` {f}" for i, f in enumerate(formations))
 
     def fmt(items: list[str]) -> str:
         return "\n".join(f"`{i+1:02d}` {v}" for i, v in enumerate(items))
@@ -296,12 +296,10 @@ async def _save_and_show(interaction: discord.Interaction, abbr: str, data: dict
     logo = team.get("logoDark") or team.get("logo")
     if logo:
         embed.set_thumbnail(url=logo)
-    embed.add_field(name="Base Formations", value=left_val, inline=True)
-    embed.add_field(name="\u200b", value=right_val, inline=True)
-    embed.add_field(name="\u200b", value="\u200b", inline=False)
+    embed.add_field(name="Base Formations", value=formation_val, inline=True)
     embed.add_field(name="Run Concepts", value=fmt(data.get("run_concepts", [])), inline=True)
-    embed.add_field(name="Quick Pass", value=fmt(data.get("quick_pass", [])), inline=True)
     embed.add_field(name="\u200b", value="\u200b", inline=False)
+    embed.add_field(name="Quick Pass", value=fmt(data.get("quick_pass", [])), inline=True)
     embed.add_field(name="Intermediate Pass", value=fmt(data.get("intermediate_pass", [])), inline=True)
     embed.add_field(name="Deep Pass", value=fmt(data.get("deep_pass", [])), inline=True)
     embed.set_footer(text=f"Last updated: {submitted}")
