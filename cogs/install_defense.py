@@ -86,9 +86,6 @@ class DefenseMultiSelectView(discord.ui.View):
                 "Select at least one option before confirming.", ephemeral=True
             )
             return
-        for child in self.children:
-            child.disabled = True
-        await interaction.response.edit_message(view=self)
         await self._on_confirm(interaction, self.selected)
 
 
