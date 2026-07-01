@@ -185,15 +185,7 @@ PHASE_TRANSITIONS = {
         "creates_channels": False,
     },
     "offseason_national_signing_day": {
-        "display": "✍️ National Signing Day",
-        "next": "offseason_position_changes",
-        "week_reset": None,
-        "has_weeks": False,
-        "week_cap": None,
-        "early_switch_allowed": False,
-    },
-    "offseason_position_changes": {
-        "display": "🔀 Position Changes",
+        "display": "✍️ National Signing Day / Position Changes",
         "next": "offseason_training",
         "week_reset": None,
         "has_weeks": False,
@@ -236,15 +228,14 @@ def get_announcement_message(current_phase: str, new_phase: str | None, week: in
         ("regular_season", None): f"🏈 **Week {week} is now live!** Check the game channels to find your game thread and get scheduled.{both_dl}",
         ("postseason", None): f"🏈 **Postseason Week {week} is live!** Next round matchups are set. Find your thread and get scheduled.{both_dl}",
 
-        # Phase switches
+        ("offseason_transfer_portal", None): f"🔄 **Transfer Portal Week {week} is now live!**{both_dl}",
         ("preseason", "regular_season"): f"🚨 **The Regular Season has begun!** Week 0 kicks things off. Time to offer scholarships!{both_dl}",
         ("regular_season", "conference_championships"): f"🏆 **Conference Championship Week!** The regular season is over. Conference Championship matchups have been set — this is what you played for. Don't let up now.{both_dl}",
         ("conference_championships", "postseason"): f"🎉 **Postseason is here!** Bowl season and Playoff matchups are live. Check your game thread and get scheduled.{both_dl}",
         ("postseason", "offseason_players_leaving"): f"📤 **The season has concluded and the offseason is now underway.** Players Leaving is now live — review your roster for early departures and transfers out of the program.{both_dl}",
         ("offseason_players_leaving", "offseason_transfer_portal"): f"🔄 **Transfer Portal is now open!** Players are on the move. Check which players have entered the portal and make your decisions accordingly.{both_dl}",
-        ("offseason_transfer_portal", "offseason_national_signing_day"): "✍️ **Advanced to National Signing Day!** Position Changes is on deck!",
-        ("offseason_national_signing_day", "offseason_position_changes"): f"🔀 **Position Changes** — Finalize any position switches on your roster before the offseason training cycle begins.{both_dl}",
-        ("offseason_position_changes", "offseason_training"): "💪 **Offseason Training is complete!** This is where programs are built. Hopefully your players made the most of the offseason!",
+        ("offseason_transfer_portal", "offseason_national_signing_day"): f"✍️ **National Signing Day & Position Changes** — Check out where you finished in the recruiting rankings and finalize any position switches before the offseason training cycle begins.{both_dl}",
+        ("offseason_national_signing_day", "offseason_training"): "💪 **Offseason Training is complete!** This is where programs are built. Hopefully your players made the most of the offseason!",
         ("offseason_training", "offseason_encourage_transfers"): f"🚪 **Encourage Transfers** — Last chance to move on from players who don't fit your program. Make your decisions and get ready for a new season.{both_dl}",
         ("offseason_encourage_transfers", "preseason"): f"🏈 **A new season is approaching!** Offseason is complete. Preseason is here — rosters are set and the next dynasty year is on the horizon. Time to scout players for the next recruiting class!{both_dl}",
     }
