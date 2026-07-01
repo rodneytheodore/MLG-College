@@ -152,14 +152,12 @@ def _build_offense_install_embed(team_info: dict, install: dict) -> discord.Embe
         return "\n".join(f"`{i+1:02d}` {v}" for i, v in enumerate(items)) or "\u200b"
 
     formations = install.get("formations", [])
-    left_val  = "\n".join(f"`{i+1:02d}` {f}" for i, f in enumerate(formations[:8]))
-    right_val = "\n".join(f"`{i+9:02d}` {f}" for i, f in enumerate(formations[8:])) or "\u200b"
+    formation_val = "\n".join(f"`{i+1:02d}` {f}" for i, f in enumerate(formations))
 
-    embed.add_field(name="Base Formations", value=left_val, inline=True)
-    embed.add_field(name="\u200b", value=right_val, inline=True)
+    embed.add_field(name="Base Formations", value=formation_val, inline=False)
     embed.add_field(name="Run Concepts", value=fmt(install.get("run_concepts", [])), inline=True)
-    embed.add_field(name="\u200b", value="\u200b", inline=False)
     embed.add_field(name="Quick Pass", value=fmt(install.get("quick_pass", [])), inline=True)
+    embed.add_field(name="\u200b", value="\u200b", inline=False)
     embed.add_field(name="Intermediate Pass", value=fmt(install.get("intermediate_pass", [])), inline=True)
     embed.add_field(name="Deep Pass", value=fmt(install.get("deep_pass", [])), inline=True)
     if install.get("last_updated"):
