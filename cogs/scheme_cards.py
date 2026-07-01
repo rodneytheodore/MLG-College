@@ -98,29 +98,14 @@ COVERAGE_TYPE_OPTIONS = [
     ("Zone (C3, Tampa 2, C4 Drop, Zone Blitz)", "Zone Coverage"),
     ("Match (C4, C3 Seam, C6, C9, C2 Sink)", "Match Coverage"),
 ]
-PRESSURE_TYPES = [
-    ("Stunts & Games (TEX, ET, Pirate, etc)", "Stunts & Games"),
-    ("Interior Blitzes (A-Gap, Cross Dog, Mug)", "Interior Blitzes"),
-    ("Edge Blitzes (Sam, Will, Nickel, Corner)", "Edge Blitzes"),
-    ("Zone Pressures (Fire Zones)", "Zone Pressures"),
-    ("Sim Pressures (Creepers, Sims)", "Sim Pressures"),
-    ("Man Pressures (Cover 0, Cover 1)", "Man Pressures"),
-]
-PRESSURE_TYPES_MAX_SELECT = 3
 
-BASE_COVERAGES = [(c, c) for c in [
-    "Cover 0", "Cover 1", "Cover 2", "Cover 2 Man",
-    "Cover 3 Sky/Cloud", "Cover 3 Match/Seam",
-    "Cover 4 Quarters/Palms", "Cover 6/Cover 9",
-]]
-BASE_COVERAGES_MAX_SELECT = 4
 
 OFFENSE_STEP_NAMES = [
     "Scheme", "Tempo", "Run/Pass Tendency", "Playbook Type",
     "Personnel Groupings", "Core Run Concepts",
     "Quick Game Pass Concepts", "Intermediate Pass Concepts", "Deep Pass Concepts",
 ]
-DEFENSE_STEP_NAMES = ["Scheme", "Coverage Shell", "Coverage Type", "Base Coverages", "Pressures"]
+DEFENSE_STEP_NAMES = ["Scheme", "Coverage Shell", "Coverage Type"]
 
 
 def build_scheme_card_embed(team_info: dict, card: dict) -> discord.Embed:
@@ -155,8 +140,6 @@ def build_scheme_card_embed(team_info: dict, card: dict) -> discord.Embed:
     if defense:
         lines = [f"**Scheme:** {defense.get('scheme', 'Not set')}  \u2022  **Identity:** {defense.get('coverage_type', 'Not set')}"]
         lines.append(f"**Coaching Tree:** {defense.get('coaching_tree', 'Not set')}  \u2022  **Shell:** {defense.get('coverage_shell', 'Not set')}")
-        lines.append(f"**Base Coverages:** {defense.get('base_coverages', 'Not set \u2014 resubmit with /set_defense_scheme')}")
-        lines.append(f"**Pressures:** {defense.get('pressures', 'Not set \u2014 resubmit with /set_defense_scheme')}")
         lines.append(f"**Summary:** {defense.get('summary', 'Not set')}")
         embed.add_field(name="DEFENSE", value="\n".join(lines), inline=False)
 
@@ -457,37 +440,10 @@ class DefenseWizard:
                 view = ChoiceStepView(choices, f"Select your {step_name.lower()}...", self._make_advance_callback())
                 await interaction.response.edit_message(content=prompt, view=view)
             else:
-                await self._show_base_coverages_step(interaction)
+                await self._save(interaction)
         return on_pick
 
-    async def _show_base_coverages_step(self, interaction: discord.Interaction):
-        view = MultiSelectStepView(
-            BASE_COVERAGES, BASE_COVERAGES_MAX_SELECT, "Base Coverages",
-            self._after_base_coverages,
-        )
-        await interaction.response.edit_message(
-            content="**(Part 2 of 2) Step 4/5 — Select up to 4 Base Coverages**, then confirm:",
-            view=view,
-        )
-
-    async def _after_base_coverages(self, interaction: discord.Interaction, selected: list[str]):
-        self.data["base_coverages"] = ", ".join(selected)
-        await self._show_pressures_step(interaction)
-
-    async def _show_pressures_step(self, interaction: discord.Interaction):
-        view = MultiSelectStepView(
-            PRESSURE_TYPES, PRESSURE_TYPES_MAX_SELECT, "pressures",
-            self._after_pressures,
-        )
-        await interaction.response.edit_message(
-            content=f"**(Part 2 of 2) Step 5/5 — Select your top pressures** "
-            f"(up to {PRESSURE_TYPES_MAX_SELECT}, then confirm):",
-            view=view,
-        )
-
-    async def _after_pressures(self, interaction: discord.Interaction, selected: list[str]):
-        self.data["pressures"] = ", ".join(selected)
-
+    async def _save(self, interaction: discord.Interaction):
         cards = load_scheme_cards()
         card = cards.setdefault(self.abbr, {})
         card["defense"] = self.data
