@@ -42,51 +42,12 @@ PERSONNEL_GROUPINGS = [(g, g) for g in [
 ]]
 PERSONNEL_MAX_SELECT = 3
 
-CORE_RUN_CONCEPTS = [(c, c) for c in [
-    "Inside Zone", "Outside Zone/Wide Zone", "Split Zone", "Zone Read",
-    "Duo", "Iso (Lead)", "Power", "Counter", "Trap",
-    "Sweep", "Toss",
-    "Power Read", "Speed Option", "Triple Option",
-]]
-CORE_RUN_MAX_SELECT = 6
-
-PASS_QUICK_GAME = [
-    ("Spacing - Three shallow routes to stretch zone horizontally", "Spacing"),
-    ("Slant - Quick angled route to the middle", "Slant"),
-    ("Stick - Sit route plus flat for a horizontal stretch", "Stick"),
-    ("Hitch - Push vertical, snap back for a rhythm throw", "Hitch"),
-    ("Snag - Corner, snag, flat triangle read", "Snag"),
-    ("Ohio - Go route outside, out route inside", "Ohio"),
-    ("Omaha - Quick out, throw on the break", "Omaha"),
-]
-PASS_QUICK_MIN, PASS_QUICK_MAX = 1, 3
-
-PASS_INTERMEDIATE = [
-    ("Choice - Receiver reads leverage and breaks in, out, or sits", "Choice"),
-    ("Curls - Push vertical then turn back for a comeback catch", "Curls"),
-    ("Drive - Shallow drag underneath a deeper crosser", "Drive"),
-    ("Follow - Two receivers stack the same route, one trailing", "Follow"),
-    ("Levels - Stacked in-breaking routes at different depths", "Levels"),
-    ("Mesh - Two receivers cross shallow to rub off man coverage", "Mesh"),
-    ("Salem/Pivot - Shallow option paired with a deeper in route", "Salem/Pivot"),
-    ("Shallow Cross - Flat shallow crosser underneath the defense", "Shallow Cross"),
-    ("Smash - Corner and hitch high-low read vs Cover 2", "Smash"),
-    ("Spot - Corner, spot, flat triangle read vs zone", "Spot"),
-    ("Texas - Deep post plus RB angle route for a high-low read", "Texas"),
-]
-PASS_INTERMEDIATE_MIN, PASS_INTERMEDIATE_MAX = 4, 6
-
-PASS_DEEP = [
-    ("Dagger - Seam clear-out with a deep dig settling behind it", "Dagger"),
-    ("Divide - Two deep routes split the field to stress one safety", "Divide"),
-    ("Double Post - Two posts at different depths flood one half", "Double Post"),
-    ("Flood - Three routes stacked at different depths on one side", "Flood"),
-    ("Double Moves - Quick route faked, then broken deep", "Double Moves"),
-    ("Switch - Receivers cross release to confuse coverage", "Switch"),
-    ("Verticals - Four receivers push vertical to stretch the zone", "Verticals"),
-    ("Deep Cross - Long crossing route over the middle", "Deep Cross"),
-]
-PASS_DEEP_MIN, PASS_DEEP_MAX = 2, 4
+from cogs.install_offense import (
+    CORE_RUN_CONCEPTS, CORE_RUN_MAX_SELECT,
+    PASS_QUICK_GAME, PASS_QUICK_MIN, PASS_QUICK_MAX,
+    PASS_INTERMEDIATE, PASS_INTERMEDIATE_MIN, PASS_INTERMEDIATE_MAX,
+    PASS_DEEP, PASS_DEEP_MIN, PASS_DEEP_MAX,
+)
 
 DEFENSE_SCHEME_OPTIONS = [(s, s) for s in [
     "4-3", "4-3 Multiple", "3-4", "3-4 Multiple", "Multiple",
@@ -101,9 +62,7 @@ COVERAGE_TYPE_OPTIONS = [
 
 
 OFFENSE_STEP_NAMES = [
-    "Scheme", "Tempo", "Run/Pass Tendency", "Playbook Type",
-    "Personnel Groupings", "Core Run Concepts",
-    "Quick Game Pass Concepts", "Intermediate Pass Concepts", "Deep Pass Concepts",
+    "Scheme", "Tempo", "Run/Pass Tendency", "Playbook Type", "Personnel Groupings",
 ]
 DEFENSE_STEP_NAMES = ["Scheme", "Coverage Shell", "Coverage Type"]
 
@@ -128,10 +87,6 @@ def build_scheme_card_embed(team_info: dict, card: dict) -> discord.Embed:
         lines.append(f"**Playbook Type:** {offense.get('playbook_type', 'Not set')}  \u2022  **Base Playbook:** {offense.get('base_playbook', 'Not set')}")
         lines.append(f"**Personnel:** {offense.get('personnel', 'Not set')}")
         lines.append(f"**Tendency:** {offense.get('run_pass', 'Not set')}")
-        lines.append(f"**Core Run Concepts:** {offense.get('core_run_concepts', 'Not set')}")
-        lines.append(f"**Quick Pass:** {offense.get('pass_quick_game', 'Not set')}")
-        lines.append(f"**Intermediate Pass:** {offense.get('pass_intermediate', 'Not set')}")
-        lines.append(f"**Deep Pass:** {offense.get('pass_deep', 'Not set')}")
         lines.append(f"**Tempo:** {offense.get('tempo', 'Not set')}")
         lines.append(f"**Summary:** {offense.get('summary', 'Not set')}")
         embed.add_field(name="OFFENSE", value="\n".join(lines), inline=False)
@@ -343,54 +298,6 @@ class OffenseWizard:
 
     async def _after_personnel(self, interaction: discord.Interaction, selected: list[str]):
         self.data["personnel"] = ", ".join(selected)
-        view = MultiSelectStepView(
-            CORE_RUN_CONCEPTS, CORE_RUN_MAX_SELECT, "core run concepts",
-            self._after_core_run,
-        )
-        await interaction.response.edit_message(
-            content=f"**(Part 2 of 2) Step 6/9 — Select your core run concepts** "
-            f"(up to {CORE_RUN_MAX_SELECT}, then confirm):",
-            view=view,
-        )
-
-    async def _after_core_run(self, interaction: discord.Interaction, selected: list[str]):
-        self.data["core_run_concepts"] = ", ".join(selected)
-        view = MultiSelectStepView(
-            PASS_QUICK_GAME, PASS_QUICK_MAX, "quick game pass concepts",
-            self._after_pass_quick, min_select=PASS_QUICK_MIN,
-        )
-        await interaction.response.edit_message(
-            content=f"**(Part 2 of 2) Step 7/9 — Quick Game pass concepts** "
-            f"(pick {PASS_QUICK_MIN}-{PASS_QUICK_MAX}, then confirm):",
-            view=view,
-        )
-
-    async def _after_pass_quick(self, interaction: discord.Interaction, selected: list[str]):
-        self.data["pass_quick_game"] = ", ".join(selected)
-        view = MultiSelectStepView(
-            PASS_INTERMEDIATE, PASS_INTERMEDIATE_MAX, "intermediate pass concepts",
-            self._after_pass_intermediate, min_select=PASS_INTERMEDIATE_MIN,
-        )
-        await interaction.response.edit_message(
-            content=f"**(Part 2 of 2) Step 8/9 — Intermediate pass concepts** "
-            f"(pick {PASS_INTERMEDIATE_MIN}-{PASS_INTERMEDIATE_MAX}, then confirm):",
-            view=view,
-        )
-
-    async def _after_pass_intermediate(self, interaction: discord.Interaction, selected: list[str]):
-        self.data["pass_intermediate"] = ", ".join(selected)
-        view = MultiSelectStepView(
-            PASS_DEEP, PASS_DEEP_MAX, "deep pass concepts",
-            self._after_pass_deep, min_select=PASS_DEEP_MIN,
-        )
-        await interaction.response.edit_message(
-            content=f"**(Part 2 of 2) Step 9/9 — Deep pass concepts** "
-            f"(pick {PASS_DEEP_MIN}-{PASS_DEEP_MAX}, then confirm):",
-            view=view,
-        )
-
-    async def _after_pass_deep(self, interaction: discord.Interaction, selected: list[str]):
-        self.data["pass_deep"] = ", ".join(selected)
 
         cards = load_scheme_cards()
         card = cards.setdefault(self.abbr, {})
