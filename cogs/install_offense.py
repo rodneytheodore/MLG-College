@@ -289,7 +289,8 @@ async def _save_and_show(interaction: discord.Interaction, abbr: str, data: dict
     team_name = team.get("name", abbr)
 
     formations = data.get("formations", [])
-    formation_val = "\n".join(f"`{i+1:02d}` {f}" for i, f in enumerate(formations))
+    left_val  = "\n".join(f"`{i+1:02d}` {f}" for i, f in enumerate(formations[:8]))
+    right_val = "\n".join(f"`{i+9:02d}` {f}" for i, f in enumerate(formations[8:])) or "\u200b"
 
     def fmt(items: list[str]) -> str:
         return "\n".join(f"`{i+1:02d}` {v}" for i, v in enumerate(items))
@@ -298,7 +299,8 @@ async def _save_and_show(interaction: discord.Interaction, abbr: str, data: dict
     logo = team.get("logoDark") or team.get("logo")
     if logo:
         embed.set_thumbnail(url=logo)
-    embed.add_field(name="Base Formations", value=formation_val, inline=True)
+    embed.add_field(name="Base Formations", value=left_val, inline=True)
+    embed.add_field(name="\u200b", value=right_val, inline=True)
     embed.add_field(name="Run Concepts", value=fmt(data.get("run_concepts", [])), inline=True)
     embed.add_field(name="\u200b", value="\u200b", inline=False)
     embed.add_field(name="Quick Pass", value=fmt(data.get("quick_pass", [])), inline=True)
