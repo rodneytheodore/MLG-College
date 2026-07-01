@@ -5,7 +5,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from utils.data import load_roster, is_admin
+from utils.data import load_roster, load_teams, is_admin
 from utils.responses import send_ephemeral
 
 DATA_DIR = os.environ.get("DATA_DIR", "data").strip()
@@ -112,11 +112,23 @@ class InstallOffenseModal3(discord.ui.Modal, title="Base Formations (3 of 3)"):
         installs[self.abbr] = {"formations": all_formations}
         save_offense_installs(installs)
 
-        lines = "\n".join(f"`{i + 1:02d}` {f}" for i, f in enumerate(all_formations))
-        await interaction.response.send_message(
-            f"✅ **{self.abbr} — Base Formations saved** ({len(all_formations)} total)\n\n{lines}",
-            ephemeral=True,
-        )
+        teams = load_teams()
+        team = teams.get(self.abbr, {})
+        team_color = int(team.get("color", "C9A227"), 16)
+        team_name = team.get("name", self.abbr)
+
+        left_val = "\n".join(f"`{i + 1:02d}` {f}" for i, f in enumerate(all_formations[:7]))
+        right_val = "\n".join(f"`{i + 8:02d}` {f}" for i, f in enumerate(all_formations[7:])) or "—"
+
+        embed = discord.Embed(title=f"{team_name} — Base Formations", color=team_color)
+        logo = team.get("logoDark") or team.get("logo")
+        if logo:
+            embed.set_thumbnail(url=logo)
+        embed.add_field(name="01–07", value=left_val, inline=True)
+        embed.add_field(name="08–14", value=right_val, inline=True)
+        embed.set_footer(text=f"{len(all_formations)} formations · {interaction.user.display_name}")
+
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 # ---- Cog ----
