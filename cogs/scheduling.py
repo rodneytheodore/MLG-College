@@ -182,6 +182,7 @@ PHASE_TRANSITIONS = {
         "has_weeks": True,
         "week_cap": 4,
         "early_switch_allowed": False,
+        "creates_channels": False,
     },
     "offseason_national_signing_day": {
         "display": "✍️ National Signing Day",
@@ -575,6 +576,36 @@ class AdvanceWeekWizard:
     ):
         week = self.next_week_num
         week_label = f"Week {week}"
+        info = get_phase(self.current_stage)
+
+        # Stages that track weeks but don't create Discord channels (e.g. Transfer Portal)
+        if not info.get("creates_channels", True):
+            season["current_week"] = week
+            save_season(season)
+            await refresh_dashboard(self.bot)
+
+            guild = interaction.guild
+            ann_channel = discord.utils.find(
+                lambda c: c.name.lower() in ("announcements", "announcement"),
+                guild.text_channels,
+            )
+            if ann_channel:
+                msg = get_announcement_message(
+                    current_phase=self.current_stage,
+                    new_phase=None,
+                    week=week,
+                    deadline=deadline,
+                    cpu_deadline=cpu_deadline,
+                )
+                await ann_channel.send(msg)
+
+            stage_label = PHASE_DISPLAY.get(self.current_stage, self.current_stage)
+            await interaction.followup.send(
+                f"✅ Advanced to **{stage_label} — {week_label}**.", ephemeral=True
+            )
+            return
+
+        # Normal week advance: requires staged games and creates channels
         week_data = season.get("weeks", {}).get(str(week))
 
         if not week_data or not week_data.get("games"):
