@@ -134,6 +134,15 @@ class _ContinueView(discord.ui.View):
         self.add_item(btn)
 
     async def _handle(self, interaction: discord.Interaction):
+        # Disable the button via webhook edit (separate from interaction response)
+        # so it can't be clicked again while the modal is open.
+        for child in self.children:
+            child.disabled = True
+        try:
+            await interaction.message.edit(view=self)
+        except Exception:
+            pass
+        # Use the interaction response to open the next modal.
         await self._on_click(interaction)
 
 
@@ -289,7 +298,8 @@ async def _save_and_show(interaction: discord.Interaction, abbr: str, data: dict
     team_name = team.get("name", abbr)
 
     formations = data.get("formations", [])
-    formation_val = "\n".join(f"`{i+1:02d}` {f}" for i, f in enumerate(formations))
+    left_val  = "\n".join(f"`{i+1:02d}` {f}" for i, f in enumerate(formations[:8]))
+    right_val = "\n".join(f"`{i+9:02d}` {f}" for i, f in enumerate(formations[8:])) or "\u200b"
 
     def fmt(items: list[str]) -> str:
         return "\n".join(f"`{i+1:02d}` {v}" for i, v in enumerate(items))
@@ -298,7 +308,9 @@ async def _save_and_show(interaction: discord.Interaction, abbr: str, data: dict
     logo = team.get("logoDark") or team.get("logo")
     if logo:
         embed.set_thumbnail(url=logo)
-    embed.add_field(name="Base Formations", value=formation_val, inline=False)
+    embed.add_field(name="Base Formations", value=left_val, inline=True)
+    embed.add_field(name="\u200b", value=right_val, inline=True)
+    embed.add_field(name="\u200b", value="\u200b", inline=False)
     embed.add_field(name="Run Concepts", value=fmt(data.get("run_concepts", [])), inline=True)
     embed.add_field(name="Quick Pass", value=fmt(data.get("quick_pass", [])), inline=True)
     embed.add_field(name="\u200b", value="\u200b", inline=False)

@@ -160,6 +160,15 @@ class _ContinueView(discord.ui.View):
         self.add_item(btn)
 
     async def _handle(self, interaction: discord.Interaction):
+        # Disable the button via webhook edit (separate from interaction response)
+        # so it can't be clicked again while the modal is open.
+        for child in self.children:
+            child.disabled = True
+        try:
+            await interaction.message.edit(view=self)
+        except Exception:
+            pass
+        # Use the interaction response to open the next modal.
         await self._on_click(interaction)
 
 
