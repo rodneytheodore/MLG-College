@@ -106,7 +106,7 @@ def build_scheme_card_embed(team_info: dict, card: dict) -> discord.Embed:
 
 def build_compact_scheme_card_embed(team_info: dict, card: dict) -> discord.Embed:
     """Short summary version shown in the scheme cards channel — full detail
-    is only shown when the View Full Scheme Card button is clicked."""
+    is only shown when the buttons are clicked."""
     embed = discord.Embed(
         title=team_info["name"],
         color=int(team_info["color"], 16) if team_info.get("color") else discord.Color.default(),
@@ -118,17 +118,15 @@ def build_compact_scheme_card_embed(team_info: dict, card: dict) -> discord.Embe
     offense = card.get("offense")
     defense = card.get("defense")
 
-    summary_parts = []
+    lines = [f"**User:** {card.get('submitted_by', 'Unknown')}"]
     if offense and offense.get("scheme"):
-        summary_parts.append(f"Offense: {offense['scheme']}")
+        lines.append(f"**Offense:** {offense['scheme']}")
     if defense and defense.get("scheme"):
-        summary_parts.append(f"Defense: {defense['scheme']}")
-    scheme_summary = "  •  ".join(summary_parts) if summary_parts else "No scheme set yet"
+        lines.append(f"**Defense:** {defense['scheme']}")
+    if len(lines) == 1:
+        lines.append("No scheme set yet")
 
-    user_name = card.get("submitted_by", "Unknown")
-    user_line = f"User: {user_name}".ljust(28)
-    summary_line = scheme_summary.ljust(40)
-    embed.description = f"`{user_line}`\n`{summary_line}`"
+    embed.description = "\n".join(lines)
 
     if card.get("last_updated"):
         embed.set_footer(text=f"Last updated: {card['last_updated']}")
@@ -136,31 +134,115 @@ def build_compact_scheme_card_embed(team_info: dict, card: dict) -> discord.Embe
     return embed
 
 
+def _build_offense_install_embed(team_info: dict, install: dict) -> discord.Embed:
+    embed = discord.Embed(
+        title=f"{team_info['name']} — Offensive Install",
+        color=int(team_info.get("color", "C9A227"), 16),
+    )
+    logo = team_info.get("logoDark") or team_info.get("logo")
+    if logo:
+        embed.set_thumbnail(url=logo)
+
+    formations = install.get("formations", [])
+    left_val = "\n".join(f"`{i+1:02d}` {f}" for i, f in enumerate(formations[:7]))
+    right_val = "\n".join(f"`{i+8:02d}` {f}" for i, f in enumerate(formations[7:])) or "\u200b"
+
+    def fmt(items: list) -> str:
+        return "\n".join(f"`{i+1:02d}` {v}" for i, v in enumerate(items)) or "\u200b"
+
+    embed.add_field(name="Base Formations", value=left_val, inline=True)
+    embed.add_field(name="\u200b", value=right_val, inline=True)
+    embed.add_field(name="\u200b", value="\u200b", inline=False)
+    embed.add_field(name="Run Concepts", value=fmt(install.get("run_concepts", [])), inline=True)
+    embed.add_field(name="Quick Pass", value=fmt(install.get("quick_pass", [])), inline=True)
+    embed.add_field(name="\u200b", value="\u200b", inline=False)
+    embed.add_field(name="Intermediate Pass", value=fmt(install.get("intermediate_pass", [])), inline=True)
+    embed.add_field(name="Deep Pass", value=fmt(install.get("deep_pass", [])), inline=True)
+    return embed
+
+
+def _build_defense_install_embed(team_info: dict, install: dict) -> discord.Embed:
+    embed = discord.Embed(
+        title=f"{team_info['name']} — Defensive Install",
+        color=int(team_info.get("color", "BA0C2F"), 16),
+    )
+    logo = team_info.get("logoDark") or team_info.get("logo")
+    if logo:
+        embed.set_thumbnail(url=logo)
+
+    def fmt(items: list) -> str:
+        return "\n".join(f"`{i+1:02d}` {v}" for i, v in enumerate(items)) or "\u200b"
+
+    embed.add_field(name="Base Formations", value=fmt(install.get("formations", [])), inline=True)
+    embed.add_field(name="Sub Packages", value=fmt(install.get("sub_packages", [])), inline=True)
+    embed.add_field(name="\u200b", value="\u200b", inline=False)
+    embed.add_field(name="Base Coverages", value=fmt(install.get("coverages", [])), inline=True)
+    embed.add_field(name="Pressure Packages", value=fmt(install.get("pressures", [])), inline=True)
+    return embed
+
+
 class ExpandSchemeCardView(discord.ui.View):
-    """Persistent button that sends the full scheme card privately to
-    whoever clicks it, keeping the channel itself compact."""
+    """Persistent buttons on each scheme card post in the channel."""
 
     def __init__(self, cog: "SchemeCards", abbr: str):
         super().__init__(timeout=None)
         self.cog = cog
         self.abbr = abbr
 
-        button = discord.ui.Button(
-            label="View Full Scheme Card",
+        btn_scheme = discord.ui.Button(
+            label="Full Scheme Card",
             style=discord.ButtonStyle.primary,
             custom_id=f"expand_scheme:{abbr}",
+            row=0,
         )
-        button.callback = self._on_click
-        self.add_item(button)
+        btn_scheme.callback = self._on_scheme_click
+        self.add_item(btn_scheme)
 
-    async def _on_click(self, interaction: discord.Interaction):
+        btn_off = discord.ui.Button(
+            label="Offensive Install",
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"off_install:{abbr}",
+            row=0,
+        )
+        btn_off.callback = self._on_offense_click
+        self.add_item(btn_off)
+
+        btn_def = discord.ui.Button(
+            label="Defensive Install",
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"def_install:{abbr}",
+            row=0,
+        )
+        btn_def.callback = self._on_defense_click
+        self.add_item(btn_def)
+
+    async def _on_scheme_click(self, interaction: discord.Interaction):
         cards = load_scheme_cards()
         card = cards.get(self.abbr)
         if not card or (not card.get("offense") and not card.get("defense")):
             await interaction.response.send_message("No scheme card set yet for this team.", ephemeral=True)
             return
-
         embed = build_scheme_card_embed(self.cog.teams[self.abbr], card)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    async def _on_offense_click(self, interaction: discord.Interaction):
+        from cogs.install_offense import load_offense_installs
+        installs = load_offense_installs()
+        install = installs.get(self.abbr)
+        if not install:
+            await interaction.response.send_message("No offensive install submitted yet.", ephemeral=True)
+            return
+        embed = _build_offense_install_embed(self.cog.teams[self.abbr], install)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    async def _on_defense_click(self, interaction: discord.Interaction):
+        from cogs.install_defense import load_defense_installs
+        installs = load_defense_installs()
+        install = installs.get(self.abbr)
+        if not install:
+            await interaction.response.send_message("No defensive install submitted yet.", ephemeral=True)
+            return
+        embed = _build_defense_install_embed(self.cog.teams[self.abbr], install)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
