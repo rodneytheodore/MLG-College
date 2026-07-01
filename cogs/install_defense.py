@@ -103,6 +103,8 @@ class DefenseInstallConfirmView(discord.ui.View):
 
     @discord.ui.button(label="✅ Save Install", style=discord.ButtonStyle.success)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        submitted = datetime.now(timezone.utc).strftime("%B %d, %Y")
+
         installs = load_defense_installs()
         installs[self.abbr] = {
             "formations": self.formations,
@@ -117,7 +119,6 @@ class DefenseInstallConfirmView(discord.ui.View):
         team = teams.get(self.abbr, {})
         team_color = int(team.get("color", "BA0C2F"), 16)
         team_name = team.get("name", self.abbr)
-        submitted = datetime.now(timezone.utc).strftime("%B %d, %Y")
 
         formation_val = "\n".join(f"`{i+1:02d}` {f}" for i, f in enumerate(self.formations))
         subs_val = "\n".join(f"`{i+1:02d}` {s}" for i, s in enumerate(self.sub_packages))
