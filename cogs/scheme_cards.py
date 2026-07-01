@@ -251,8 +251,6 @@ class ExpandSchemeCardView(discord.ui.View):
 def build_step_prompt(step_names: list[str], index: int, label: str) -> str:
     total = len(step_names)
     text = f"**(Part 2 of 2) Step {index + 1}/{total} — Pick your {label.lower()}:**"
-    if index + 1 < total:
-        text += f"\n*Next up: {step_names[index + 1]}*"
     return text
 
 
