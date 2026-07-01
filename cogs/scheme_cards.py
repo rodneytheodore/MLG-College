@@ -118,13 +118,13 @@ def build_compact_scheme_card_embed(team_info: dict, card: dict) -> discord.Embe
     offense = card.get("offense")
     defense = card.get("defense")
 
-    lines = [f"**User:** {card.get('submitted_by', 'Unknown')}"]
+    lines = [f"`{'Coach:':<9}{card.get('submitted_by', 'Unknown')}`"]
     if offense and offense.get("scheme"):
-        lines.append(f"**Offense:** {offense['scheme']}")
+        lines.append(f"`{'Offense:':<9}{offense['scheme']}`")
     if defense and defense.get("scheme"):
-        lines.append(f"**Defense:** {defense['scheme']}")
+        lines.append(f"`{'Defense:':<9}{defense['scheme']}`")
     if len(lines) == 1:
-        lines.append("No scheme set yet")
+        lines.append("`No scheme set yet`")
 
     embed.description = "\n".join(lines)
 
