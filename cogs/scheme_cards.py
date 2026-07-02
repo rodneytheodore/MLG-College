@@ -610,6 +610,133 @@ class SchemeCards(commands.Cog):
     async def view_scheme_card_team_autocomplete(self, interaction: discord.Interaction, current: str):
         return await self.team_autocomplete(interaction, current)
 
+    @app_commands.command(
+        name="missing_scheme_cards",
+        description="List rostered teams missing an offense and/or defense scheme card (admin only)",
+    )
+    async def missing_scheme_cards(self, interaction: discord.Interaction):
+        if not is_admin(interaction):
+            await send_ephemeral(interaction, "Only admins can do that.")
+            return
+
+        roster = load_roster()
+        if not roster:
+            await send_ephemeral(interaction, "No teams are currently rostered.")
+            return
+
+        cards = load_scheme_cards()
+
+        incomplete = []  # (team_name, username, missing_label)
+        for abbr, entry in roster.items():
+            if abbr not in self.teams:
+                continue
+            card = cards.get(abbr, {})
+            has_offense = bool(card.get("offense") and card["offense"].get("scheme"))
+            has_defense = bool(card.get("defense") and card["defense"].get("scheme"))
+
+            if has_offense and has_defense:
+                continue
+
+            if not has_offense and not has_defense:
+                missing = "Offense + Defense"
+            elif not has_offense:
+                missing = "Offense"
+            else:
+                missing = "Defense"
+
+            team_name = self.teams[abbr]["name"]
+            username = entry.get("username", "Unknown")
+            incomplete.append((team_name, username, missing))
+
+        if not incomplete:
+            embed = discord.Embed(
+                title="✅ All Scheme Cards Complete",
+                description="Every rostered team has both an offense and defense scheme card set.",
+                color=discord.Color.green(),
+            )
+            embed.set_footer(text="This message will disappear in 5 minutes.")
+            await send_ephemeral(interaction, embed=embed, delete_after=300)
+            return
+
+        incomplete.sort(key=lambda x: x[0])
+        lines = []
+        for team_name, username, missing in incomplete:
+            lines.append(f"`{team_name}`\n{username} — *missing {missing}*")
+
+        embed = discord.Embed(
+            title=f"Missing Scheme Cards ({len(incomplete)})",
+            description="\n\n".join(lines),
+            color=discord.Color.orange(),
+        )
+        embed.set_footer(text="This message will disappear in 5 minutes.")
+
+        await send_ephemeral(interaction, embed=embed, delete_after=300)
+
+
+    @app_commands.command(
+        name="missing_installs",
+        description="List rostered teams missing an offense and/or defense install (admin only)",
+    )
+    async def missing_installs(self, interaction: discord.Interaction):
+        if not is_admin(interaction):
+            await send_ephemeral(interaction, "Only admins can do that.")
+            return
+
+        roster = load_roster()
+        if not roster:
+            await send_ephemeral(interaction, "No teams are currently rostered.")
+            return
+
+        from cogs.install_offense import load_offense_installs
+        from cogs.install_defense import load_defense_installs
+        offense_installs = load_offense_installs()
+        defense_installs = load_defense_installs()
+
+        incomplete = []  # (team_name, username, missing_label)
+        for abbr, entry in roster.items():
+            if abbr not in self.teams:
+                continue
+            has_offense = abbr in offense_installs
+            has_defense = abbr in defense_installs
+
+            if has_offense and has_defense:
+                continue
+
+            if not has_offense and not has_defense:
+                missing = "Offense + Defense"
+            elif not has_offense:
+                missing = "Offense"
+            else:
+                missing = "Defense"
+
+            team_name = self.teams[abbr]["name"]
+            username = entry.get("username", "Unknown")
+            incomplete.append((team_name, username, missing))
+
+        if not incomplete:
+            embed = discord.Embed(
+                title="✅ All Installs Complete",
+                description="Every rostered team has both an offense and defense install submitted.",
+                color=discord.Color.green(),
+            )
+            embed.set_footer(text="This message will disappear in 5 minutes.")
+            await send_ephemeral(interaction, embed=embed, delete_after=300)
+            return
+
+        incomplete.sort(key=lambda x: x[0])
+        lines = []
+        for team_name, username, missing in incomplete:
+            lines.append(f"`{team_name}`\n{username} — *missing {missing}*")
+
+        embed = discord.Embed(
+            title=f"Missing Installs ({len(incomplete)})",
+            description="\n\n".join(lines),
+            color=discord.Color.orange(),
+        )
+        embed.set_footer(text="This message will disappear in 5 minutes.")
+
+        await send_ephemeral(interaction, embed=embed, delete_after=300)
+
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(SchemeCards(bot))

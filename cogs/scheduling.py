@@ -62,7 +62,10 @@ def deadline_preview() -> str:
     return "\n".join(lines)
 
 
-def build_dashboard_embed(season: dict, roster: dict, scheme_cards: dict) -> discord.Embed:
+def build_dashboard_embed(season: dict, roster: dict, scheme_cards: dict,
+                          offense_installs: dict = None, defense_installs: dict = None) -> discord.Embed:
+    offense_installs = offense_installs or {}
+    defense_installs = defense_installs or {}
     year = season.get("year") or "Not set yet"
     current_stage = season.get("current_stage", "preseason")
     stage = PHASE_DISPLAY.get(current_stage, current_stage)
@@ -74,6 +77,12 @@ def build_dashboard_embed(season: dict, roster: dict, scheme_cards: dict) -> dis
     submitted_count = sum(
         1 for card in scheme_cards.values()
         if card.get("offense") and card.get("defense")
+    )
+
+    # Installs complete = team has BOTH an offense and defense install submitted
+    installs_count = sum(
+        1 for abbr in roster
+        if abbr in offense_installs and abbr in defense_installs
     )
 
     week_data = season.get("weeks", {}).get(str(current_week)) if current_week is not None else None
@@ -91,7 +100,8 @@ def build_dashboard_embed(season: dict, roster: dict, scheme_cards: dict) -> dis
     embed.add_field(name="Stage", value=stage, inline=True)
     embed.add_field(name="Current Week", value=week_text, inline=True)
     embed.add_field(name="Teams Claimed", value=f"{claimed_count}/32", inline=True)
-    embed.add_field(name="Scheme Cards Submitted", value=f"{submitted_count}/{claimed_count}", inline=False)
+    embed.add_field(name="Scheme Cards Submitted", value=f"{submitted_count}/{claimed_count}", inline=True)
+    embed.add_field(name="Installs Complete", value=f"{installs_count}/{claimed_count}", inline=True)
     embed.add_field(name="CPU Games Count", value=str(len(cpu_games)), inline=True)
     embed.add_field(name="CPU Games Completed", value=f"{cpu_completed}/{len(cpu_games)}", inline=True)
     embed.add_field(name="\u200b", value="\u200b", inline=False)  # invisible spacer, forces a row break
@@ -116,7 +126,11 @@ async def refresh_dashboard(bot: commands.Bot):
     season = load_season()
     roster = load_roster()
     scheme_cards = load_scheme_cards()
-    embed = build_dashboard_embed(season, roster, scheme_cards)
+    from cogs.install_offense import load_offense_installs
+    from cogs.install_defense import load_defense_installs
+    offense_installs = load_offense_installs()
+    defense_installs = load_defense_installs()
+    embed = build_dashboard_embed(season, roster, scheme_cards, offense_installs, defense_installs)
 
     message_id = settings.get("dashboard_message_id")
     message = None
