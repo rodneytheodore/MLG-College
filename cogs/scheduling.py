@@ -722,6 +722,127 @@ class AdvanceWeekWizard:
         )
 
 
+# ---- Extend Deadline ----
+
+class ExtendDeadlineConfirmView(discord.ui.View):
+    def __init__(self, wizard: "ExtendDeadlineWizard"):
+        super().__init__(timeout=60)
+        self.wizard = wizard
+
+    @discord.ui.button(label="✅ Extend Deadline", style=discord.ButtonStyle.success)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not is_admin(interaction):
+            await interaction.response.send_message("Only admins can do this.", ephemeral=True)
+            return
+        for child in self.children:
+            child.disabled = True
+        await interaction.response.edit_message(view=self)
+        await self.wizard.execute(interaction)
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        for child in self.children:
+            child.disabled = True
+        await interaction.response.edit_message(content="Cancelled. Nothing was changed.", view=self)
+
+
+class ExtendDeadlineWizard:
+    def __init__(self, bot: commands.Bot, week: int):
+        self.bot = bot
+        self.week = week
+        self.day_offset: int | None = None
+        self.hour_str: str | None = None
+        self.minute_str: str | None = None
+
+    @property
+    def deadline_tuple(self) -> tuple[str | None, str | None]:
+        if self.day_offset is None:
+            return None, None
+        return build_deadline_strings(self.day_offset, self.hour_str, self.minute_str)
+
+    def _label(self) -> str:
+        return f"Extend Deadline — Week {self.week}"
+
+    async def start(self, interaction: discord.Interaction):
+        view = AdvanceSelectView(DAY_OPTIONS, "New deadline — how many days out?", self._on_day_pick)
+        await interaction.response.send_message(
+            f"**{self._label()}** — set the new deadline:", view=view, ephemeral=True
+        )
+
+    async def _on_day_pick(self, interaction: discord.Interaction, value: str):
+        if value == "no_deadline":
+            self.day_offset = None
+            await self._edit_confirm(interaction)
+        else:
+            self.day_offset = int(value)
+            view = AdvanceSelectView(HOUR_OPTIONS, "New deadline — hour?", self._on_hour_pick)
+            await interaction.response.edit_message(
+                content=f"**{self._label()}** — what time (hour)?", view=view
+            )
+
+    async def _on_hour_pick(self, interaction: discord.Interaction, value: str):
+        self.hour_str = value
+        view = AdvanceSelectView(MINUTE_OPTIONS, "New deadline — :00 or :30?", self._on_minute_pick)
+        await interaction.response.edit_message(
+            content=f"**{self._label()}** — :00 or :30?", view=view
+        )
+
+    async def _on_minute_pick(self, interaction: discord.Interaction, value: str):
+        self.minute_str = value
+        await self._edit_confirm(interaction)
+
+    async def _edit_confirm(self, interaction: discord.Interaction):
+        deadline, cpu_deadline = self.deadline_tuple
+        dl_line = (
+            f"**User games due:** {deadline}\n**CPU games due:** {cpu_deadline}"
+            if deadline else "**No deadline.**"
+        )
+        view = ExtendDeadlineConfirmView(self)
+        await interaction.response.edit_message(
+            content=f"**{self._label()}** — confirm?\n\n{dl_line}", view=view
+        )
+
+    async def execute(self, interaction: discord.Interaction):
+        deadline, cpu_deadline = self.deadline_tuple
+
+        season = load_season()
+        week_data = season.get("weeks", {}).get(str(self.week))
+        if not week_data:
+            await interaction.followup.send("Week data not found.", ephemeral=True)
+            return
+
+        week_data["deadline"] = deadline
+        week_data["cpu_deadline"] = cpu_deadline
+        save_season(season)
+
+        guild = interaction.guild
+        dl_text = f"\n📅 **New deadline:** {deadline}" if deadline else ""
+        cpu_dl_text = f"\n📅 **New CPU deadline:** {cpu_deadline}" if cpu_deadline else ""
+
+        # Post update in CPU channel
+        cpu_channel_id = week_data.get("cpu_channel_id")
+        if cpu_channel_id:
+            cpu_channel = guild.get_channel(cpu_channel_id)
+            if cpu_channel:
+                await cpu_channel.send(f"⏰ **Deadline extended.**{cpu_dl_text}")
+
+        # Post update in each active user game thread
+        user_channel_id = week_data.get("user_channel_id")
+        if user_channel_id:
+            user_channel = guild.get_channel(user_channel_id)
+            if user_channel:
+                for thread in user_channel.threads:
+                    if not thread.archived and not thread.locked:
+                        await thread.send(f"⏰ **Deadline extended.**{dl_text}")
+
+        await interaction.followup.send(
+            f"✅ **Week {self.week} deadline updated.**\n"
+            f"User games: {deadline or 'No deadline'}\n"
+            f"CPU games: {cpu_deadline or 'No deadline'}",
+            ephemeral=True,
+        )
+
+
 async def _do_advance_week(
     interaction: discord.Interaction, bot: commands.Bot,
     week: int, week_label: str, new_phase: str | None,
@@ -1469,6 +1590,7 @@ class Scheduling(commands.Cog):
 
     @app_commands.command(name="advance_week", description="Advance to the next week or stage (admin only)")
     async def advance_week(self, interaction: discord.Interaction):
+
         if not is_admin(interaction):
             await send_ephemeral(interaction, "Only admins can advance the week.")
             return
@@ -1481,6 +1603,29 @@ class Scheduling(commands.Cog):
 
         wizard = AdvanceWeekWizard(bot=self.bot, cog=self)
         await wizard.start(interaction)
+
+    @app_commands.command(name="extend_deadline", description="Extend the current week's deadline (admin only)")
+    async def extend_deadline(self, interaction: discord.Interaction):
+        if not is_admin(interaction):
+            await send_ephemeral(interaction, "Only admins can extend the deadline.")
+            return
+
+        season = load_season()
+        current_week = season.get("current_week")
+
+        if not current_week:
+            await send_ephemeral(interaction, "No active week is set.")
+            return
+
+        week_data = season.get("weeks", {}).get(str(current_week))
+        if not week_data or week_data.get("status") != "active":
+            await send_ephemeral(interaction, f"Week {current_week} is not currently active.")
+            return
+
+        wizard = ExtendDeadlineWizard(bot=self.bot, week=current_week)
+        await wizard.start(interaction)
+
+
 
     # ---------- Dynasty/season lifecycle commands ----------
 
