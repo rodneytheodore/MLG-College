@@ -5,7 +5,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from utils.data import is_admin, load_roster, save_roster, load_teams, load_teams_by_conference, resolve_team
+from utils.data import is_admin, load_roster, save_roster, load_teams, load_teams_by_conference
 from utils.responses import send_ephemeral
 from cogs.scheduling import refresh_dashboard
 
@@ -439,76 +439,120 @@ class DraftPickButtonView(discord.ui.View):
         await interaction.response.send_message("**Select a conference:**", view=view, ephemeral=True)
 
 
-class SetEligibleTeamsModal(discord.ui.Modal, title="Set Eligible Teams"):
-    teams_input = discord.ui.TextInput(
-        label="Eligible teams — one per line",
-        style=discord.TextStyle.paragraph,
-        placeholder="Georgia\nAlabama\nOhio State\n...",
-        required=True,
-        max_length=4000,
-    )
+def _finish_eligible_teams(draft: dict, selected_abbrs: list[str]) -> tuple[discord.Embed, str]:
+    """Saves eligible_teams and builds the confirmation embed + optional warning text."""
+    draft["eligible_teams"] = selected_abbrs
+    save_draft(draft)
 
-    async def on_submit(self, interaction: discord.Interaction):
-        lines = [line.strip() for line in self.teams_input.value.splitlines() if line.strip()]
+    teams = load_teams()
+    if selected_abbrs:
+        lines_out = "\n".join(f"`{i + 1:02d}` {teams[a]['name']}" for i, a in enumerate(selected_abbrs))
+    else:
+        lines_out = "*(none selected — draft pool restriction cleared)*"
 
-        if not lines:
-            await interaction.response.send_message("No teams entered.", ephemeral=True)
+    embed = discord.Embed(title="🏈 Eligible Teams Set", description=lines_out, color=discord.Color.blurple())
+    embed.set_footer(text=f"{len(selected_abbrs)} teams — draft pool restricted to this list")
+
+    warning = ""
+    existing_order = draft.get("order")
+    team_count = draft.get("team_count")
+    if existing_order and team_count and team_count != len(selected_abbrs):
+        warning = (
+            f"⚠️ Draft order is already set for **{team_count}** participants — "
+            f"this list has **{len(selected_abbrs)}**. Adjust one to match."
+        )
+
+    return embed, warning
+
+
+class EligibleTeamsWizard:
+    """Walks through admin-chosen conferences one at a time, letting them
+    multi-select which teams from each are eligible for the draft."""
+
+    def __init__(self, conferences: list[str]):
+        self.conferences = conferences
+        self.index = 0
+        self.selected_abbrs: list[str] = []
+        self.by_conf = load_teams_by_conference()
+
+    async def start(self, interaction: discord.Interaction):
+        await self._show_current(interaction, first=True)
+
+    async def _show_current(self, interaction: discord.Interaction, first: bool = False):
+        conference = self.conferences[self.index]
+        teams = self.by_conf.get(conference, [])
+        view = ConferenceTeamMultiSelectView(self, conference, teams)
+        content = f"**{conference}** ({self.index + 1}/{len(self.conferences)}) — select eligible teams:"
+
+        if first:
+            await interaction.response.send_message(content, view=view, ephemeral=True)
+        else:
+            await interaction.response.edit_message(content=content, view=view)
+
+    async def advance(self, interaction: discord.Interaction):
+        self.index += 1
+        if self.index >= len(self.conferences):
+            await self._finish(interaction)
             return
+        await self._show_current(interaction)
 
-        if len(lines) > MAX_TEAMS:
-            await interaction.response.send_message(
-                f"Too many entries ({len(lines)}). Max is {MAX_TEAMS}.", ephemeral=True
-            )
-            return
-
-        teams = load_teams()
-        resolved: list[str] = []
-        errors: list[str] = []
-        seen: set[str] = set()
-
-        for i, line in enumerate(lines, start=1):
-            abbr, error = resolve_team(line, teams)
-            if error:
-                errors.append(f"Line {i}: {error}")
-                continue
-            if abbr in seen:
-                errors.append(f"Line {i}: {teams[abbr]['name']} is already listed")
-                continue
-            seen.add(abbr)
-            resolved.append(abbr)
-
-        if errors:
-            error_text = "\n".join(errors[:15])
-            more = f"\n...and {len(errors) - 15} more" if len(errors) > 15 else ""
-            await interaction.response.send_message(
-                f"❌ Couldn't set eligible teams:\n{error_text}{more}", ephemeral=True
-            )
-            return
-
+    async def _finish(self, interaction: discord.Interaction):
         draft = load_draft()
-        draft["eligible_teams"] = resolved
-        save_draft(draft)
+        embed, warning = _finish_eligible_teams(draft, self.selected_abbrs)
+        await interaction.response.edit_message(content=warning or None, embed=embed, view=None)
 
-        lines_out = "\n".join(f"`{i + 1:02d}` {teams[a]['name']}" for i, a in enumerate(resolved))
-        embed = discord.Embed(
-            title="🏈 Eligible Teams Set",
-            description=lines_out,
-            color=discord.Color.blurple(),
+
+class ConferenceTeamMultiSelectView(discord.ui.View):
+    """Step 2 (repeated per conference) — multi-select eligible teams within one conference."""
+
+    def __init__(self, wizard: EligibleTeamsWizard, conference: str, teams: list[dict]):
+        super().__init__(timeout=180)
+        self.wizard = wizard
+
+        options = [discord.SelectOption(label=t["name"][:100], value=t["abbr"][:100]) for t in teams[:25]]
+        select = discord.ui.Select(
+            placeholder=f"Select eligible teams in {conference}...",
+            min_values=0,
+            max_values=max(len(options), 1),
+            options=options,
         )
+        select.callback = self._on_select
+        self.add_item(select)
 
-        warning = ""
-        existing_order = draft.get("order")
-        team_count = draft.get("team_count")
-        if existing_order and team_count and team_count != len(resolved):
-            warning = (
-                f" ⚠️ Draft order is already set for **{team_count}** participants — "
-                f"this list has **{len(resolved)}**. Update one to match."
-            )
+        skip_btn = discord.ui.Button(label="Skip this conference", style=discord.ButtonStyle.secondary)
+        skip_btn.callback = self._on_skip
+        self.add_item(skip_btn)
 
-        embed.set_footer(text=f"{len(resolved)} teams — draft pool restricted to this list")
-        await interaction.response.send_message(
-            content=warning if warning else None, embed=embed, ephemeral=True
+    async def _on_select(self, interaction: discord.Interaction):
+        self.wizard.selected_abbrs.extend(self.children[0].values)
+        await self.wizard.advance(interaction)
+
+    async def _on_skip(self, interaction: discord.Interaction):
+        await self.wizard.advance(interaction)
+
+
+class EligibleConferenceSelectView(discord.ui.View):
+    """Step 1 — multi-select which conferences to pull eligible teams from."""
+
+    def __init__(self):
+        super().__init__(timeout=180)
+        by_conf = load_teams_by_conference()
+        conference_names = list(by_conf.keys())
+
+        options = [discord.SelectOption(label=c[:100], value=c[:100]) for c in conference_names[:25]]
+        select = discord.ui.Select(
+            placeholder="Select one or more conferences...",
+            min_values=1,
+            max_values=len(options),
+            options=options,
         )
+        select.callback = self._on_select
+        self.add_item(select)
+
+    async def _on_select(self, interaction: discord.Interaction):
+        chosen_conferences = self.children[0].values
+        wizard = EligibleTeamsWizard(chosen_conferences)
+        await wizard.start(interaction)
 
 
 class Draft(commands.Cog):
@@ -544,7 +588,11 @@ class Draft(commands.Cog):
             await send_ephemeral(interaction, "Can't change eligible teams after the draft has started.")
             return
 
-        await interaction.response.send_modal(SetEligibleTeamsModal())
+        await interaction.response.send_message(
+            "**Select conferences to pull eligible teams from:**",
+            view=EligibleConferenceSelectView(),
+            ephemeral=True,
+        )
 
     @app_commands.command(name="view_draft_order", description="View the current draft order")
     async def view_draft_order(self, interaction: discord.Interaction):
