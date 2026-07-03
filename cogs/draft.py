@@ -5,7 +5,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from utils.data import is_admin, load_roster, save_roster, load_teams, load_teams_by_conference
+from utils.data import is_admin, load_roster, save_roster, load_teams, load_teams_by_conference, resolve_team
 from utils.responses import send_ephemeral
 from cogs.scheduling import refresh_dashboard
 
@@ -207,14 +207,33 @@ async def _announce_current_pick(channel: discord.TextChannel, draft: dict):
     )
 
 
-def _available_conferences() -> list[str]:
-    """Conferences that still have at least one unclaimed team."""
+def _eligible_set(draft: dict) -> set[str] | None:
+    """Returns the eligible abbr set, or None if no restriction is set (all teams eligible)."""
+    eligible = draft.get("eligible_teams")
+    return set(eligible) if eligible else None
+
+
+def _teams_by_conference_available(draft: dict) -> dict[str, list[dict]]:
+    """Conference -> list of team dicts, filtered to unclaimed AND (if set) eligible."""
     by_conf = load_teams_by_conference()
     roster = load_roster()
-    return [
-        conf for conf, teams in by_conf.items()
-        if any(t["abbr"].upper() not in roster for t in teams)
-    ]
+    eligible = _eligible_set(draft)
+
+    result = {}
+    for conf, teams in by_conf.items():
+        avail = [
+            t for t in teams
+            if t["abbr"].upper() not in roster
+            and (eligible is None or t["abbr"].upper() in eligible)
+        ]
+        if avail:
+            result[conf] = avail
+    return result
+
+
+def _available_conferences(draft: dict) -> list[str]:
+    """Conferences that still have at least one unclaimed, eligible team."""
+    return list(_teams_by_conference_available(draft).keys())
 
 
 async def _finalize_pick(interaction: discord.Interaction, abbr: str):
@@ -244,6 +263,13 @@ async def _finalize_pick(interaction: discord.Interaction, abbr: str):
     teams = load_teams()
     if abbr not in teams:
         await interaction.response.edit_message(content="That team couldn't be found. Try again.", view=None)
+        return
+
+    eligible = _eligible_set(draft)
+    if eligible is not None and abbr not in eligible:
+        await interaction.response.edit_message(
+            content=f"`{abbr}` isn't in the eligible teams list for this draft.", view=None
+        )
         return
 
     roster = load_roster()
@@ -312,7 +338,8 @@ class TeamPickSelectView(discord.ui.View):
         await _finalize_pick(interaction, abbr)
 
     async def _on_back(self, interaction: discord.Interaction):
-        conferences = _available_conferences()
+        draft = load_draft()
+        conferences = _available_conferences(draft)
         view = ConferencePickView(conferences)
         await interaction.response.edit_message(content="**Select a conference:**", view=view)
 
@@ -342,12 +369,11 @@ class ConferencePickView(discord.ui.View):
             await interaction.response.edit_message(content="It's no longer your turn.", view=None)
             return
 
-        by_conf = load_teams_by_conference()
-        roster = load_roster()
-        available = [t for t in by_conf.get(conference, []) if t["abbr"].upper() not in roster]
+        by_conf_available = _teams_by_conference_available(draft)
+        available = by_conf_available.get(conference, [])
 
         if not available:
-            conferences = _available_conferences()
+            conferences = _available_conferences(draft)
             view = ConferencePickView(conferences)
             await interaction.response.edit_message(
                 content=f"No teams left in **{conference}**. Pick a different conference:",
@@ -395,13 +421,78 @@ class DraftPickButtonView(discord.ui.View):
             )
             return
 
-        conferences = _available_conferences()
+        conferences = _available_conferences(draft)
         if not conferences:
             await interaction.response.send_message("No teams are currently available to pick.", ephemeral=True)
             return
 
         view = ConferencePickView(conferences)
         await interaction.response.send_message("**Select a conference:**", view=view, ephemeral=True)
+
+
+class SetEligibleTeamsModal(discord.ui.Modal, title="Set Eligible Teams"):
+    teams_input = discord.ui.TextInput(
+        label="Eligible teams — one per line",
+        style=discord.TextStyle.paragraph,
+        placeholder="Georgia\nAlabama\nOhio State\n...",
+        required=True,
+        max_length=4000,
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        draft = load_draft()
+        if not draft.get("order"):
+            await interaction.response.send_message(
+                "Set the draft order first with `/set_draft_order`.", ephemeral=True
+            )
+            return
+
+        team_count = draft.get("team_count", len(draft["order"]))
+        lines = [line.strip() for line in self.teams_input.value.splitlines() if line.strip()]
+
+        if len(lines) != team_count:
+            await interaction.response.send_message(
+                f"You entered {len(lines)} team(s), but this draft has **{team_count}** participants — "
+                f"the eligible list must contain exactly {team_count} teams.",
+                ephemeral=True,
+            )
+            return
+
+        teams = load_teams()
+        resolved: list[str] = []
+        errors: list[str] = []
+        seen: set[str] = set()
+
+        for i, line in enumerate(lines, start=1):
+            abbr, error = resolve_team(line, teams)
+            if error:
+                errors.append(f"Line {i}: {error}")
+                continue
+            if abbr in seen:
+                errors.append(f"Line {i}: {teams[abbr]['name']} is already listed")
+                continue
+            seen.add(abbr)
+            resolved.append(abbr)
+
+        if errors:
+            error_text = "\n".join(errors[:15])
+            more = f"\n...and {len(errors) - 15} more" if len(errors) > 15 else ""
+            await interaction.response.send_message(
+                f"❌ Couldn't set eligible teams:\n{error_text}{more}", ephemeral=True
+            )
+            return
+
+        draft["eligible_teams"] = resolved
+        save_draft(draft)
+
+        lines_out = "\n".join(f"`{i + 1:02d}` {teams[a]['name']}" for i, a in enumerate(resolved))
+        embed = discord.Embed(
+            title="🏈 Eligible Teams Set",
+            description=lines_out,
+            color=discord.Color.blurple(),
+        )
+        embed.set_footer(text=f"{len(resolved)} teams — draft pool restricted to this list")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 class Draft(commands.Cog):
@@ -422,6 +513,25 @@ class Draft(commands.Cog):
             await send_ephemeral(interaction, "Only admins can set the draft order.")
             return
         await interaction.response.send_modal(TeamCountModal())
+
+    @app_commands.command(
+        name="set_eligible_teams",
+        description="Restrict which teams are available in the draft (admin only)",
+    )
+    async def set_eligible_teams(self, interaction: discord.Interaction):
+        if not is_admin(interaction):
+            await send_ephemeral(interaction, "Only admins can set eligible teams.")
+            return
+
+        draft = load_draft()
+        if not draft.get("order"):
+            await send_ephemeral(interaction, "Set the draft order first with `/set_draft_order`.")
+            return
+        if draft.get("status") in ("drafting", "complete"):
+            await send_ephemeral(interaction, "Can't change eligible teams after the draft has started.")
+            return
+
+        await interaction.response.send_modal(SetEligibleTeamsModal())
 
     @app_commands.command(name="view_draft_order", description="View the current draft order")
     async def view_draft_order(self, interaction: discord.Interaction):
