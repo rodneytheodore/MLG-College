@@ -196,6 +196,9 @@ class DraftOrderWizard:
 
         embed = build_draft_order_embed(draft)
         posted_channel = await _post_draft_order(interaction.guild, [embed, build_eligible_teams_embed(draft)])
+
+        warning = ""
+        eligible = draft.get("eligible_teams")
         if eligible and len(eligible) != self.team_count:
             warning = (
                 f"\n⚠️ **{len(eligible)} eligible teams** were set previously, but this draft has "
