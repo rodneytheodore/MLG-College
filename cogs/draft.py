@@ -222,14 +222,46 @@ def _eligible_set(draft: dict) -> set[str] | None:
     return set(eligible) if eligible else None
 
 
+def _abbr_to_conference() -> dict[str, str]:
+    by_conf = load_teams_by_conference()
+    mapping = {}
+    for conf, teams in by_conf.items():
+        for t in teams:
+            mapping[t["abbr"].upper()] = conf
+    return mapping
+
+
+def _picked_counts_by_conference(draft: dict) -> dict[str, int]:
+    """How many picks have already been made from each conference, based on
+    the draft order's picked_team fields (not the whole league roster —
+    this stays accurate even if /assign_team was used outside the draft)."""
+    abbr_to_conf = _abbr_to_conference()
+    counts: dict[str, int] = {}
+    for entry in draft.get("order", []):
+        abbr = entry.get("picked_team")
+        if not abbr:
+            continue
+        conf = abbr_to_conf.get(abbr.upper())
+        if conf:
+            counts[conf] = counts.get(conf, 0) + 1
+    return counts
+
+
 def _teams_by_conference_available(draft: dict) -> dict[str, list[dict]]:
-    """Conference -> list of team dicts, filtered to unclaimed AND (if set) eligible."""
+    """Conference -> list of team dicts, filtered to unclaimed, eligible,
+    and NOT locked out by having already hit its configured max."""
     by_conf = load_teams_by_conference()
     roster = load_roster()
     eligible = _eligible_set(draft)
+    limits = draft.get("conference_limits", {})
+    counts = _picked_counts_by_conference(draft)
 
     result = {}
     for conf, teams in by_conf.items():
+        max_cap = limits.get(conf, {}).get("max")
+        if max_cap is not None and counts.get(conf, 0) >= max_cap:
+            continue  # conference locked — max already reached
+
         avail = [
             t for t in teams
             if t["abbr"].upper() not in roster
@@ -241,8 +273,25 @@ def _teams_by_conference_available(draft: dict) -> dict[str, list[dict]]:
 
 
 def _available_conferences(draft: dict) -> list[str]:
-    """Conferences that still have at least one unclaimed, eligible team."""
+    """Conferences that still have at least one unclaimed, eligible, unlocked team."""
     return list(_teams_by_conference_available(draft).keys())
+
+
+def _min_deficit_after_pick(draft: dict, picked_conference: str | None) -> int:
+    """Total remaining minimum-team obligations across all conferences,
+    assuming the hypothetical pick from picked_conference has just happened.
+    Used to block a pick that would make some other conference's minimum
+    impossible to reach with the slots left."""
+    limits = draft.get("conference_limits", {})
+    counts = _picked_counts_by_conference(draft)
+    if picked_conference:
+        counts[picked_conference] = counts.get(picked_conference, 0) + 1
+
+    deficit = 0
+    for conf, lim in limits.items():
+        min_v = lim.get("min", 0)
+        deficit += max(0, min_v - counts.get(conf, 0))
+    return deficit
 
 
 async def _finalize_pick(interaction: discord.Interaction, abbr: str):
@@ -286,6 +335,34 @@ async def _finalize_pick(interaction: discord.Interaction, abbr: str):
         owner_id = roster[abbr]["user_id"]
         await interaction.response.edit_message(
             content=f"`{abbr}` was just claimed by <@{owner_id}>. Click **Make Your Pick** again to choose another team.",
+            view=None,
+        )
+        return
+
+    abbr_to_conf = _abbr_to_conference()
+    picked_conference = abbr_to_conf.get(abbr)
+
+    limits = draft.get("conference_limits", {})
+    conf_max = limits.get(picked_conference, {}).get("max") if picked_conference else None
+    if conf_max is not None:
+        current_conf_count = _picked_counts_by_conference(draft).get(picked_conference, 0)
+        if current_conf_count >= conf_max:
+            await interaction.response.edit_message(
+                content=f"**{picked_conference}** has already reached its max of {conf_max} team(s). "
+                        f"Click **Make Your Pick** again to choose a different conference.",
+                view=None,
+            )
+            return
+
+    remaining_slots_after = len(order) - (current_pick + 1)
+    deficit_after = _min_deficit_after_pick(draft, picked_conference)
+    if deficit_after > remaining_slots_after:
+        await interaction.response.edit_message(
+            content=(
+                f"Picking **{teams[abbr]['name']}** would leave only {remaining_slots_after} pick(s) remaining, "
+                f"but {deficit_after} more pick(s) are still required to satisfy conference minimums. "
+                f"Click **Make Your Pick** again and choose a team from a conference that still needs coverage."
+            ),
             view=None,
         )
         return
@@ -439,9 +516,10 @@ class DraftPickButtonView(discord.ui.View):
         await interaction.response.send_message("**Select a conference:**", view=view, ephemeral=True)
 
 
-def _finish_eligible_teams(draft: dict, selected_abbrs: list[str]) -> tuple[discord.Embed, str]:
-    """Saves eligible_teams and builds the confirmation embed + optional warning text."""
+def _finish_eligible_teams(draft: dict, selected_abbrs: list[str], conference_limits: dict) -> tuple[discord.Embed, str]:
+    """Saves eligible_teams + conference_limits and builds the confirmation embed + optional warning text."""
     draft["eligible_teams"] = selected_abbrs
+    draft["conference_limits"] = conference_limits
     save_draft(draft)
 
     teams = load_teams()
@@ -473,6 +551,7 @@ class EligibleTeamsWizard:
         self.conferences = conferences
         self.index = 0
         self.selected_abbrs: list[str] = []
+        self.conference_limits: dict[str, dict] = {}
         self.by_conf = load_teams_by_conference()
 
     def current_conference(self) -> str:
@@ -505,7 +584,7 @@ class EligibleTeamsWizard:
 
     async def _finish(self, interaction: discord.Interaction):
         draft = load_draft()
-        embed, warning = _finish_eligible_teams(draft, self.selected_abbrs)
+        embed, warning = _finish_eligible_teams(draft, self.selected_abbrs, self.conference_limits)
         await interaction.response.edit_message(content=warning or None, embed=embed, view=None)
 
 
@@ -562,6 +641,8 @@ class ConferenceMinMaxView(discord.ui.View):
             )
             return
 
+        self.wizard.conference_limits[self.conference] = {"min": self.min_value, "max": self.max_value}
+
         if self.max_value == 0:
             await self.wizard.after_conference_selection(interaction, [])
             return
@@ -577,6 +658,7 @@ class ConferenceMinMaxView(discord.ui.View):
         )
 
     async def _on_skip(self, interaction: discord.Interaction):
+        self.wizard.conference_limits[self.conference] = {"min": 0, "max": 0}
         await self.wizard.after_conference_selection(interaction, [])
 
 
