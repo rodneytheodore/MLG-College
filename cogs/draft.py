@@ -6,7 +6,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from utils.data import is_admin, load_roster, save_roster, load_teams, load_teams_by_conference
-from utils.responses import send_ephemeral
+from utils.responses import send_ephemeral, send_ephemeral_followup
 from cogs.scheduling import refresh_dashboard
 
 DATA_DIR = os.environ.get("DATA_DIR", "data").strip()
@@ -32,8 +32,8 @@ def save_draft(data: dict):
 DRAFT_CHANNEL_NAMES = ("team-draft", "dynasty-team-draft")
 
 
-async def _post_draft_order(guild: discord.Guild, embed: discord.Embed) -> discord.TextChannel | None:
-    """Finds the draft channel by name (case-insensitive) and posts the embed there.
+async def _post_draft_order(guild: discord.Guild, embeds: list[discord.Embed]) -> discord.TextChannel | None:
+    """Finds the draft channel by name (case-insensitive) and posts the embeds there.
     Returns the channel if found and posted, else None."""
     channel = discord.utils.find(
         lambda c: isinstance(c, discord.TextChannel) and c.name.lower() in DRAFT_CHANNEL_NAMES,
@@ -43,7 +43,7 @@ async def _post_draft_order(guild: discord.Guild, embed: discord.Embed) -> disco
         return None
 
     await channel.purge(limit=50, check=lambda m: m.author == guild.me)
-    await channel.send(embed=embed)
+    await channel.send(embeds=embeds)
     return channel
 
 
@@ -68,6 +68,38 @@ def build_draft_order_embed(draft: dict) -> discord.Embed:
         color=discord.Color.green() if status == "complete" else discord.Color.blurple(),
     )
     embed.set_footer(text=f"{len(order)} participants")
+    return embed
+
+
+def build_eligible_teams_embed(draft: dict) -> discord.Embed:
+    """Running list of every eligible team, showing who picked it (if anyone).
+    Falls back to the full team pool when no eligible_teams restriction is set."""
+    teams = load_teams()
+    eligible = draft.get("eligible_teams")
+    abbrs = eligible if eligible else list(teams.keys())
+    abbrs_sorted = sorted(abbrs, key=lambda a: teams.get(a, {}).get("school") or teams.get(a, {}).get("name", a))
+
+    picked_map = {
+        entry["picked_team"]: entry["user_id"]
+        for entry in draft.get("order", [])
+        if entry.get("picked_team")
+    }
+
+    lines = []
+    for abbr in abbrs_sorted:
+        team = teams.get(abbr, {})
+        name = team.get("school") or team.get("name", abbr)
+        if abbr in picked_map:
+            lines.append(f"✅ {name} — <@{picked_map[abbr]}>")
+        else:
+            lines.append(f"⬜ {name}")
+
+    embed = discord.Embed(
+        title="🏈 Eligible Teams",
+        description="\n".join(lines) if lines else "*(no eligible teams set)*",
+        color=discord.Color.gold(),
+    )
+    embed.set_footer(text=f"{len(picked_map)}/{len(abbrs_sorted)} teams picked")
     return embed
 
 
@@ -138,10 +170,7 @@ class DraftOrderWizard:
         save_draft(draft)
 
         embed = build_draft_order_embed(draft)
-        posted_channel = await _post_draft_order(interaction.guild, embed)
-
-        warning = ""
-        eligible = draft.get("eligible_teams")
+        posted_channel = await _post_draft_order(interaction.guild, [embed, build_eligible_teams_embed(draft)])
         if eligible and len(eligible) != self.team_count:
             warning = (
                 f"\n⚠️ **{len(eligible)} eligible teams** were set previously, but this draft has "
@@ -392,7 +421,7 @@ async def _finalize_pick(interaction: discord.Interaction, abbr: str):
     if channel is None:
         return
 
-    await channel.send(embed=build_draft_order_embed(draft))
+    await channel.send(embeds=[build_draft_order_embed(draft), build_eligible_teams_embed(draft)])
 
     if draft["status"] == "complete":
         await channel.send("🎉 **The draft is complete!** All teams have been claimed.")
@@ -755,6 +784,7 @@ class Draft(commands.Cog):
             return
 
         await send_ephemeral(interaction, embed=build_draft_order_embed(draft))
+        await send_ephemeral_followup(interaction, embed=build_eligible_teams_embed(draft))
 
     @app_commands.command(
         name="post_draft_order",
@@ -770,7 +800,9 @@ class Draft(commands.Cog):
             await send_ephemeral(interaction, "No draft order has been set yet.")
             return
 
-        posted_channel = await _post_draft_order(interaction.guild, build_draft_order_embed(draft))
+        posted_channel = await _post_draft_order(
+            interaction.guild, [build_draft_order_embed(draft), build_eligible_teams_embed(draft)]
+        )
         if posted_channel:
             await send_ephemeral(interaction, f"Posted to {posted_channel.mention}.")
         else:
@@ -804,7 +836,7 @@ class Draft(commands.Cog):
         save_draft(draft)
 
         embed = build_draft_order_embed(draft)
-        posted_channel = await _post_draft_order(interaction.guild, embed)
+        posted_channel = await _post_draft_order(interaction.guild, [embed, build_eligible_teams_embed(draft)])
 
         if posted_channel:
             await _announce_current_pick(posted_channel, draft)
