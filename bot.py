@@ -4,6 +4,7 @@ from discord.ext import commands
 
 intents = discord.Intents.default()
 intents.message_content = True
+intents.members = True
 
 # Add the filenames (without .py) of any cogs in the cogs/ folder here
 COGS = [
@@ -12,6 +13,7 @@ COGS = [
     "cogs.scheme_cards",
     "cogs.install_offense",
     "cogs.install_defense",
+    "cogs.draft",
 ]
 
 GUILD_ID = 1207738346424770631  # your server's ID, for instant command sync
@@ -30,6 +32,11 @@ class MLGBot(commands.Bot):
         if scheduling_cog is not None:
             scheduling_cog.register_active_views()
             print("Registered persistent views for active CPU games.")
+
+        scheme_cards_cog = self.get_cog("SchemeCards")
+        if scheme_cards_cog is not None:
+            scheme_cards_cog.register_active_views()
+            print("Registered persistent views for scheme card buttons.")
 
         guild = discord.Object(id=GUILD_ID)
 
