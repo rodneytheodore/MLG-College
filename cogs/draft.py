@@ -128,23 +128,32 @@ class DraftOrderWizard:
         )
 
     async def _finish(self, interaction: discord.Interaction):
-        draft = {
+        draft = load_draft()
+        draft.update({
             "team_count": self.team_count,
             "order": [{"user_id": m.id, "username": str(m)} for m in self.picks],
             "current_pick": 0,
             "status": "order_set",
-        }
+        })
         save_draft(draft)
 
         embed = build_draft_order_embed(draft)
         posted_channel = await _post_draft_order(interaction.guild, embed)
 
+        warning = ""
+        eligible = draft.get("eligible_teams")
+        if eligible and len(eligible) != self.team_count:
+            warning = (
+                f"\n⚠️ **{len(eligible)} eligible teams** were set previously, but this draft has "
+                f"**{self.team_count} participants**. Run `/set_eligible_teams` again to fix the mismatch."
+            )
+
         if posted_channel:
-            summary = f"✅ **Draft order set.** Posted to {posted_channel.mention}."
+            summary = f"✅ **Draft order set.** Posted to {posted_channel.mention}.{warning}"
         else:
             summary = (
                 "✅ **Draft order set,** but no `#team-draft` (or `#dynasty-team-draft`) "
-                "channel was found. Create one and re-run `/view_draft_order` to post it there."
+                f"channel was found. Create one and re-run `/view_draft_order` to post it there.{warning}"
             )
 
         await interaction.response.edit_message(content=summary, embed=embed, view=None)
@@ -440,21 +449,15 @@ class SetEligibleTeamsModal(discord.ui.Modal, title="Set Eligible Teams"):
     )
 
     async def on_submit(self, interaction: discord.Interaction):
-        draft = load_draft()
-        if not draft.get("order"):
-            await interaction.response.send_message(
-                "Set the draft order first with `/set_draft_order`.", ephemeral=True
-            )
-            return
-
-        team_count = draft.get("team_count", len(draft["order"]))
         lines = [line.strip() for line in self.teams_input.value.splitlines() if line.strip()]
 
-        if len(lines) != team_count:
+        if not lines:
+            await interaction.response.send_message("No teams entered.", ephemeral=True)
+            return
+
+        if len(lines) > MAX_TEAMS:
             await interaction.response.send_message(
-                f"You entered {len(lines)} team(s), but this draft has **{team_count}** participants — "
-                f"the eligible list must contain exactly {team_count} teams.",
-                ephemeral=True,
+                f"Too many entries ({len(lines)}). Max is {MAX_TEAMS}.", ephemeral=True
             )
             return
 
@@ -482,6 +485,7 @@ class SetEligibleTeamsModal(discord.ui.Modal, title="Set Eligible Teams"):
             )
             return
 
+        draft = load_draft()
         draft["eligible_teams"] = resolved
         save_draft(draft)
 
@@ -491,8 +495,20 @@ class SetEligibleTeamsModal(discord.ui.Modal, title="Set Eligible Teams"):
             description=lines_out,
             color=discord.Color.blurple(),
         )
+
+        warning = ""
+        existing_order = draft.get("order")
+        team_count = draft.get("team_count")
+        if existing_order and team_count and team_count != len(resolved):
+            warning = (
+                f" ⚠️ Draft order is already set for **{team_count}** participants — "
+                f"this list has **{len(resolved)}**. Update one to match."
+            )
+
         embed.set_footer(text=f"{len(resolved)} teams — draft pool restricted to this list")
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.response.send_message(
+            content=warning if warning else None, embed=embed, ephemeral=True
+        )
 
 
 class Draft(commands.Cog):
@@ -524,9 +540,6 @@ class Draft(commands.Cog):
             return
 
         draft = load_draft()
-        if not draft.get("order"):
-            await send_ephemeral(interaction, "Set the draft order first with `/set_draft_order`.")
-            return
         if draft.get("status") in ("drafting", "complete"):
             await send_ephemeral(interaction, "Can't change eligible teams after the draft has started.")
             return
