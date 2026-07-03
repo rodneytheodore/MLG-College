@@ -5,7 +5,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from utils.data import is_admin, load_roster, save_roster, load_teams, resolve_team
+from utils.data import is_admin, load_roster, save_roster, load_teams, load_teams_by_conference
 from utils.responses import send_ephemeral
 from cogs.scheduling import refresh_dashboard
 
@@ -207,82 +207,156 @@ async def _announce_current_pick(channel: discord.TextChannel, draft: dict):
     )
 
 
-class TeamPickModal(discord.ui.Modal, title="Make Your Draft Pick"):
-    team_input = discord.ui.TextInput(
-        label="Team",
-        placeholder="e.g. Georgia or UGA",
-        required=True,
-        max_length=60,
+def _available_conferences() -> list[str]:
+    """Conferences that still have at least one unclaimed team."""
+    by_conf = load_teams_by_conference()
+    roster = load_roster()
+    return [
+        conf for conf, teams in by_conf.items()
+        if any(t["abbr"].upper() not in roster for t in teams)
+    ]
+
+
+async def _finalize_pick(interaction: discord.Interaction, abbr: str):
+    """Reloads draft state fresh, re-validates, and completes the pick.
+    Called from the team select — this is the single source of truth for
+    committing a pick, whichever path got here."""
+    draft = load_draft()
+
+    if draft.get("status") != "drafting":
+        await interaction.response.edit_message(content="The draft isn't currently in progress.", view=None)
+        return
+
+    order = draft.get("order", [])
+    current_pick = draft.get("current_pick", 0)
+
+    if current_pick >= len(order):
+        await interaction.response.edit_message(content="The draft is already complete.", view=None)
+        return
+
+    expected_user_id = order[current_pick]["user_id"]
+    if interaction.user.id != expected_user_id:
+        await interaction.response.edit_message(
+            content=f"It's not your turn. <@{expected_user_id}> is currently picking.", view=None
+        )
+        return
+
+    teams = load_teams()
+    if abbr not in teams:
+        await interaction.response.edit_message(content="That team couldn't be found. Try again.", view=None)
+        return
+
+    roster = load_roster()
+    if abbr in roster:
+        owner_id = roster[abbr]["user_id"]
+        await interaction.response.edit_message(
+            content=f"`{abbr}` was just claimed by <@{owner_id}>. Click **Make Your Pick** again to choose another team.",
+            view=None,
+        )
+        return
+
+    roster[abbr] = {"user_id": interaction.user.id, "username": str(interaction.user)}
+    save_roster(roster)
+
+    order[current_pick]["picked_team"] = abbr
+    draft["current_pick"] = current_pick + 1
+    if draft["current_pick"] >= len(order):
+        draft["status"] = "complete"
+    save_draft(draft)
+
+    bot = interaction.client
+    roster_cog = bot.get_cog("Roster")
+    if roster_cog is not None:
+        await roster_cog.refresh_roster_channel()
+    await refresh_dashboard(bot)
+
+    team_name = teams[abbr]["name"]
+    await interaction.response.edit_message(content=f"✅ You picked **{team_name}**!", view=None)
+
+    channel = discord.utils.find(
+        lambda c: isinstance(c, discord.TextChannel) and c.name.lower() in DRAFT_CHANNEL_NAMES,
+        interaction.guild.channels,
     )
+    if channel is None:
+        return
 
-    async def on_submit(self, interaction: discord.Interaction):
-        # Reload fresh — another admin/user action may have changed state since the button was shown.
+    await channel.send(embed=build_draft_order_embed(draft))
+
+    if draft["status"] == "complete":
+        await channel.send("🎉 **The draft is complete!** All teams have been claimed.")
+    else:
+        await _announce_current_pick(channel, draft)
+
+
+class TeamPickSelectView(discord.ui.View):
+    """Step 2 — pick an unclaimed team within the chosen conference."""
+
+    def __init__(self, conference: str, available_teams: list[dict]):
+        super().__init__(timeout=120)
+        self.conference = conference
+
+        options = [
+            discord.SelectOption(label=t["name"][:100], value=t["abbr"][:100])
+            for t in available_teams[:25]
+        ]
+        select = discord.ui.Select(placeholder="Select your team...", min_values=1, max_values=1, options=options)
+        select.callback = self._on_select
+        self.add_item(select)
+
+        back_btn = discord.ui.Button(label="← Back to Conferences", style=discord.ButtonStyle.secondary)
+        back_btn.callback = self._on_back
+        self.add_item(back_btn)
+
+    async def _on_select(self, interaction: discord.Interaction):
+        abbr = self.children[0].values[0]
+        await _finalize_pick(interaction, abbr)
+
+    async def _on_back(self, interaction: discord.Interaction):
+        conferences = _available_conferences()
+        view = ConferencePickView(conferences)
+        await interaction.response.edit_message(content="**Select a conference:**", view=view)
+
+
+class ConferencePickView(discord.ui.View):
+    """Step 1 — pick a conference, filtered to only those with unclaimed teams."""
+
+    def __init__(self, conferences: list[str]):
+        super().__init__(timeout=120)
+        options = [discord.SelectOption(label=conf[:100], value=conf[:100]) for conf in conferences[:25]]
+        select = discord.ui.Select(placeholder="Select a conference...", min_values=1, max_values=1, options=options)
+        select.callback = self._on_select
+        self.add_item(select)
+
+    async def _on_select(self, interaction: discord.Interaction):
+        conference = self.children[0].values[0]
+
+        # Re-validate turn fresh before showing teams, in case state changed
+        # since the button was clicked.
         draft = load_draft()
-
         if draft.get("status") != "drafting":
-            await interaction.response.send_message("The draft isn't currently in progress.", ephemeral=True)
+            await interaction.response.edit_message(content="The draft isn't currently in progress.", view=None)
             return
-
         order = draft.get("order", [])
         current_pick = draft.get("current_pick", 0)
-
-        if current_pick >= len(order):
-            await interaction.response.send_message("The draft is already complete.", ephemeral=True)
+        if current_pick >= len(order) or interaction.user.id != order[current_pick]["user_id"]:
+            await interaction.response.edit_message(content="It's no longer your turn.", view=None)
             return
 
-        expected_user_id = order[current_pick]["user_id"]
-        if interaction.user.id != expected_user_id:
-            await interaction.response.send_message(
-                f"It's not your turn. <@{expected_user_id}> is currently picking.", ephemeral=True
-            )
-            return
-
-        teams = load_teams()
-        abbr, error = resolve_team(self.team_input.value, teams)
-        if error:
-            await interaction.response.send_message(error, ephemeral=True)
-            return
-
+        by_conf = load_teams_by_conference()
         roster = load_roster()
-        if abbr in roster:
-            owner_id = roster[abbr]["user_id"]
-            await interaction.response.send_message(
-                f"`{abbr}` is already claimed by <@{owner_id}>. Click **Make Your Pick** again to try a different team.",
-                ephemeral=True,
+        available = [t for t in by_conf.get(conference, []) if t["abbr"].upper() not in roster]
+
+        if not available:
+            conferences = _available_conferences()
+            view = ConferencePickView(conferences)
+            await interaction.response.edit_message(
+                content=f"No teams left in **{conference}**. Pick a different conference:",
+                view=view,
             )
             return
 
-        roster[abbr] = {"user_id": interaction.user.id, "username": str(interaction.user)}
-        save_roster(roster)
-
-        order[current_pick]["picked_team"] = abbr
-        draft["current_pick"] = current_pick + 1
-        if draft["current_pick"] >= len(order):
-            draft["status"] = "complete"
-        save_draft(draft)
-
-        bot = interaction.client
-        roster_cog = bot.get_cog("Roster")
-        if roster_cog is not None:
-            await roster_cog.refresh_roster_channel()
-        await refresh_dashboard(bot)
-
-        team_name = teams[abbr]["name"]
-        await interaction.response.send_message(f"✅ You picked **{team_name}**!", ephemeral=True)
-
-        channel = discord.utils.find(
-            lambda c: isinstance(c, discord.TextChannel) and c.name.lower() in DRAFT_CHANNEL_NAMES,
-            interaction.guild.channels,
-        )
-        if channel is None:
-            return
-
-        await channel.send(embed=build_draft_order_embed(draft))
-
-        if draft["status"] == "complete":
-            await channel.send("🎉 **The draft is complete!** All teams have been claimed.")
-        else:
-            await _announce_current_pick(channel, draft)
+        view = TeamPickSelectView(conference, available)
+        await interaction.response.edit_message(content=f"**{conference}** — pick your team:", view=view)
 
 
 class DraftPickButtonView(discord.ui.View):
@@ -321,7 +395,13 @@ class DraftPickButtonView(discord.ui.View):
             )
             return
 
-        await interaction.response.send_modal(TeamPickModal())
+        conferences = _available_conferences()
+        if not conferences:
+            await interaction.response.send_message("No teams are currently available to pick.", ephemeral=True)
+            return
+
+        view = ConferencePickView(conferences)
+        await interaction.response.send_message("**Select a conference:**", view=view, ephemeral=True)
 
 
 class Draft(commands.Cog):
