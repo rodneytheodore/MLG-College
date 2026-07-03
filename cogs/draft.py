@@ -466,8 +466,8 @@ def _finish_eligible_teams(draft: dict, selected_abbrs: list[str]) -> tuple[disc
 
 
 class EligibleTeamsWizard:
-    """Walks through admin-chosen conferences one at a time, letting them
-    multi-select which teams from each are eligible for the draft."""
+    """Walks through admin-chosen conferences one at a time: set a min/max
+    team range, then multi-select eligible teams within that range."""
 
     def __init__(self, conferences: list[str]):
         self.conferences = conferences
@@ -475,26 +475,33 @@ class EligibleTeamsWizard:
         self.selected_abbrs: list[str] = []
         self.by_conf = load_teams_by_conference()
 
-    async def start(self, interaction: discord.Interaction):
-        await self._show_current(interaction, first=True)
+    def current_conference(self) -> str:
+        return self.conferences[self.index]
 
-    async def _show_current(self, interaction: discord.Interaction, first: bool = False):
-        conference = self.conferences[self.index]
-        teams = self.by_conf.get(conference, [])
-        view = ConferenceTeamMultiSelectView(self, conference, teams)
-        content = f"**{conference}** ({self.index + 1}/{len(self.conferences)}) — select eligible teams:"
+    def team_count_for(self, conference: str) -> int:
+        return len(self.by_conf.get(conference, []))
+
+    async def start(self, interaction: discord.Interaction):
+        await self._show_min_max(interaction, first=True)
+
+    async def _show_min_max(self, interaction: discord.Interaction, first: bool = False):
+        conference = self.current_conference()
+        view = ConferenceMinMaxView(self, conference)
+        content = f"**{conference}** ({self.index + 1}/{len(self.conferences)}) — set the eligible team range:"
 
         if first:
             await interaction.response.send_message(content, view=view, ephemeral=True)
         else:
             await interaction.response.edit_message(content=content, view=view)
 
-    async def advance(self, interaction: discord.Interaction):
+    async def after_conference_selection(self, interaction: discord.Interaction, selected: list[str]):
+        """Called once a conference's teams have been chosen (or skipped)."""
+        self.selected_abbrs.extend(selected)
         self.index += 1
         if self.index >= len(self.conferences):
             await self._finish(interaction)
             return
-        await self._show_current(interaction)
+        await self._show_min_max(interaction)
 
     async def _finish(self, interaction: discord.Interaction):
         draft = load_draft()
@@ -502,33 +509,97 @@ class EligibleTeamsWizard:
         await interaction.response.edit_message(content=warning or None, embed=embed, view=None)
 
 
-class ConferenceTeamMultiSelectView(discord.ui.View):
-    """Step 2 (repeated per conference) — multi-select eligible teams within one conference."""
+class ConferenceMinMaxView(discord.ui.View):
+    """Step 2a (repeated per conference) — pick a min/max eligible team count
+    for this conference before choosing the actual teams."""
 
-    def __init__(self, wizard: EligibleTeamsWizard, conference: str, teams: list[dict]):
+    def __init__(self, wizard: EligibleTeamsWizard, conference: str):
+        super().__init__(timeout=180)
+        self.wizard = wizard
+        self.conference = conference
+
+        max_possible = wizard.team_count_for(conference)
+        self.min_value = 0
+        self.max_value = max_possible
+
+        count_options = [discord.SelectOption(label=str(i), value=str(i)) for i in range(max_possible + 1)]
+
+        self.min_select = discord.ui.Select(
+            placeholder="Minimum teams (default 0)",
+            min_values=1, max_values=1, options=count_options, row=0,
+        )
+        self.min_select.callback = self._on_min
+        self.add_item(self.min_select)
+
+        self.max_select = discord.ui.Select(
+            placeholder=f"Maximum teams (default {max_possible})",
+            min_values=1, max_values=1, options=count_options, row=1,
+        )
+        self.max_select.callback = self._on_max
+        self.add_item(self.max_select)
+
+        confirm_btn = discord.ui.Button(label="Continue →", style=discord.ButtonStyle.primary, row=2)
+        confirm_btn.callback = self._on_confirm
+        self.add_item(confirm_btn)
+
+        skip_btn = discord.ui.Button(label="Skip this conference", style=discord.ButtonStyle.secondary, row=2)
+        skip_btn.callback = self._on_skip
+        self.add_item(skip_btn)
+
+    async def _on_min(self, interaction: discord.Interaction):
+        self.min_value = int(self.min_select.values[0])
+        await interaction.response.defer()
+
+    async def _on_max(self, interaction: discord.Interaction):
+        self.max_value = int(self.max_select.values[0])
+        await interaction.response.defer()
+
+    async def _on_confirm(self, interaction: discord.Interaction):
+        if self.min_value > self.max_value:
+            await interaction.response.send_message(
+                f"Minimum ({self.min_value}) can't exceed maximum ({self.max_value}). Adjust and try again.",
+                ephemeral=True,
+            )
+            return
+
+        if self.max_value == 0:
+            await self.wizard.after_conference_selection(interaction, [])
+            return
+
+        teams = self.wizard.by_conf.get(self.conference, [])
+        view = ConferenceTeamMultiSelectView(self.wizard, self.conference, teams, self.min_value, self.max_value)
+        await interaction.response.edit_message(
+            content=(
+                f"**{self.conference}** ({self.wizard.index + 1}/{len(self.wizard.conferences)}) — "
+                f"select {self.min_value}-{self.max_value} eligible team(s):"
+            ),
+            view=view,
+        )
+
+    async def _on_skip(self, interaction: discord.Interaction):
+        await self.wizard.after_conference_selection(interaction, [])
+
+
+class ConferenceTeamMultiSelectView(discord.ui.View):
+    """Step 2b (repeated per conference) — multi-select eligible teams,
+    constrained to the min/max range chosen in the previous step."""
+
+    def __init__(self, wizard: EligibleTeamsWizard, conference: str, teams: list[dict], min_v: int, max_v: int):
         super().__init__(timeout=180)
         self.wizard = wizard
 
         options = [discord.SelectOption(label=t["name"][:100], value=t["abbr"][:100]) for t in teams[:25]]
         select = discord.ui.Select(
-            placeholder=f"Select eligible teams in {conference}...",
-            min_values=0,
-            max_values=max(len(options), 1),
+            placeholder=f"Select {min_v}-{max_v} team(s) in {conference}...",
+            min_values=min_v,
+            max_values=max_v,
             options=options,
         )
         select.callback = self._on_select
         self.add_item(select)
 
-        skip_btn = discord.ui.Button(label="Skip this conference", style=discord.ButtonStyle.secondary)
-        skip_btn.callback = self._on_skip
-        self.add_item(skip_btn)
-
     async def _on_select(self, interaction: discord.Interaction):
-        self.wizard.selected_abbrs.extend(self.children[0].values)
-        await self.wizard.advance(interaction)
-
-    async def _on_skip(self, interaction: discord.Interaction):
-        await self.wizard.advance(interaction)
+        await self.wizard.after_conference_selection(interaction, self.children[0].values)
 
 
 class EligibleConferenceSelectView(discord.ui.View):
