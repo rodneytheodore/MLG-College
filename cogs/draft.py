@@ -7,7 +7,6 @@ from discord.ext import commands
 
 from utils.data import is_admin
 from utils.responses import send_ephemeral
-from cogs.roster import resolve_member
 
 DATA_DIR = os.environ.get("DATA_DIR", "data").strip()
 DRAFT_PATH_NAME = "draft.json"
@@ -29,29 +28,7 @@ def save_draft(data: dict):
         json.dump(data, f, indent=2)
 
 
-# ---- Continue button (bridges modal → modal since Discord forbids modal → modal) ----
-
-class _ContinueView(discord.ui.View):
-    """Ephemeral button used between chained modals."""
-
-    def __init__(self, label: str, on_click, style: discord.ButtonStyle = discord.ButtonStyle.primary):
-        super().__init__(timeout=300)
-        self._on_click = on_click
-        btn = discord.ui.Button(label=label, style=style)
-        btn.callback = self._handle
-        self.add_item(btn)
-
-    async def _handle(self, interaction: discord.Interaction):
-        for child in self.children:
-            child.disabled = True
-        try:
-            await interaction.message.edit(view=self)
-        except Exception:
-            pass
-        await self._on_click(interaction)
-
-
-# ---- Step 1: how many teams ----
+# ---- Step 1: how many teams (modal — just a number, no lookup needed) ----
 
 class TeamCountModal(discord.ui.Modal, title="Draft Setup — Team Count"):
     team_count_input = discord.ui.TextInput(
@@ -65,9 +42,7 @@ class TeamCountModal(discord.ui.Modal, title="Draft Setup — Team Count"):
         raw = self.team_count_input.value.strip()
 
         if not raw.isdigit():
-            await interaction.response.send_message(
-                "Please enter a whole number.", ephemeral=True
-            )
+            await interaction.response.send_message("Please enter a whole number.", ephemeral=True)
             return
 
         count = int(raw)
@@ -77,106 +52,100 @@ class TeamCountModal(discord.ui.Modal, title="Draft Setup — Team Count"):
             )
             return
 
-        async def on_continue(interaction: discord.Interaction):
-            await interaction.response.send_modal(SetDraftOrderModal(team_count=count))
+        wizard = DraftOrderWizard(team_count=count)
+        await wizard.start(interaction)
 
-        view = _ContinueView(f"Continue → Enter Draft Order ({count} teams)", on_continue)
+
+# ---- Step 2: sequential native user picker, one pick at a time ----
+
+class DraftOrderWizard:
+    def __init__(self, team_count: int):
+        self.team_count = team_count
+        self.picks: list[discord.Member] = []
+
+    async def start(self, interaction: discord.Interaction):
+        view = PickUserView(self)
         await interaction.response.send_message(
-            f"**{count} teams** set for this draft. Click to enter the draft order:",
+            f"**Pick 1 of {self.team_count}** — who picks first?",
             view=view,
             ephemeral=True,
         )
 
+    async def _advance(self, interaction: discord.Interaction):
+        next_pick_number = len(self.picks) + 1
 
-# ---- Step 2: enter the order ----
-
-class SetDraftOrderModal(discord.ui.Modal, title="Set Draft Order"):
-    order_input = discord.ui.TextInput(
-        label="Draft order — one user per line",
-        style=discord.TextStyle.paragraph,
-        placeholder="rodneytheodore\nnick_saban99\njdawg42\n...",
-        required=True,
-        max_length=4000,
-    )
-
-    def __init__(self, team_count: int):
-        super().__init__()
-        self.team_count = team_count
-        self.order_input.label = f"Draft order — exactly {team_count} lines"
-
-    async def on_submit(self, interaction: discord.Interaction):
-        lines = [line.strip() for line in self.order_input.value.splitlines() if line.strip()]
-
-        if len(lines) != self.team_count:
-            count = self.team_count
-
-            async def on_retry(interaction: discord.Interaction):
-                await interaction.response.send_modal(SetDraftOrderModal(team_count=count))
-
-            view = _ContinueView(f"Retry → Enter Draft Order ({count} teams)", on_retry, discord.ButtonStyle.danger)
-            await interaction.response.send_message(
-                f"❌ You entered {len(lines)} line(s) but the draft is set for **{count}** teams. "
-                f"Click to try again:",
-                view=view,
-                ephemeral=True,
-            )
+        if next_pick_number > self.team_count:
+            await self._finish(interaction)
             return
 
-        resolved: list[discord.Member] = []
-        errors: list[str] = []
-        seen_ids: set[int] = set()
+        view = PickUserView(self)
+        await interaction.response.edit_message(
+            content=f"**Pick {next_pick_number} of {self.team_count}** — who's next?",
+            view=view,
+        )
 
-        for i, line in enumerate(lines, start=1):
-            result = await resolve_member(interaction.guild, line)
-
-            if result is None:
-                errors.append(f"Pick {i}: no member found matching `{line}`")
-                continue
-
-            if isinstance(result, list):
-                names = ", ".join(m.global_name or m.name for m in result[:5])
-                errors.append(f"Pick {i}: `{line}` matches multiple members ({names})")
-                continue
-
-            if result.id in seen_ids:
-                errors.append(f"Pick {i}: {result.global_name or result.name} already appears earlier in the list")
-                continue
-
-            seen_ids.add(result.id)
-            resolved.append(result)
-
-        if errors:
-            count = self.team_count
-
-            async def on_retry(interaction: discord.Interaction):
-                await interaction.response.send_modal(SetDraftOrderModal(team_count=count))
-
-            error_text = "\n".join(errors[:15])
-            more = f"\n...and {len(errors) - 15} more" if len(errors) > 15 else ""
-            view = _ContinueView(f"Retry → Enter Draft Order ({count} teams)", on_retry, discord.ButtonStyle.danger)
-            await interaction.response.send_message(
-                f"❌ Couldn't set the draft order — fix these entries and resubmit:\n{error_text}{more}",
-                view=view,
-                ephemeral=True,
-            )
-            return
-
+    async def _finish(self, interaction: discord.Interaction):
         draft = {
             "team_count": self.team_count,
-            "order": [{"user_id": m.id, "username": str(m)} for m in resolved],
+            "order": [{"user_id": m.id, "username": str(m)} for m in self.picks],
             "current_pick": 0,
             "status": "order_set",
         }
         save_draft(draft)
 
-        lines_out = "\n".join(f"`{i + 1:02d}` {m.mention}" for i, m in enumerate(resolved))
+        lines_out = "\n".join(f"`{i + 1:02d}` {m.mention}" for i, m in enumerate(self.picks))
         embed = discord.Embed(
             title="🏈 Draft Order Set",
             description=lines_out,
             color=discord.Color.blurple(),
         )
-        embed.set_footer(text=f"{len(resolved)} participants")
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        embed.set_footer(text=f"{len(self.picks)} participants")
+        await interaction.response.edit_message(content=None, embed=embed, view=None)
+
+
+class PickUserView(discord.ui.View):
+    def __init__(self, wizard: DraftOrderWizard):
+        super().__init__(timeout=300)
+        self.wizard = wizard
+
+        select = discord.ui.UserSelect(
+            placeholder="Search for a user...",
+            min_values=1,
+            max_values=1,
+        )
+        select.callback = self._on_select
+        self.add_item(select)
+
+        cancel_btn = discord.ui.Button(label="Cancel", style=discord.ButtonStyle.secondary)
+        cancel_btn.callback = self._on_cancel
+        self.add_item(cancel_btn)
+
+    async def _on_select(self, interaction: discord.Interaction):
+        # discord.py resolves UserSelect values directly on the component
+        member = self.children[0].values[0]
+
+        if not isinstance(member, discord.Member):
+            await interaction.response.send_message(
+                "Couldn't resolve that selection to a server member. Try again.", ephemeral=True
+            )
+            return
+
+        if any(m.id == member.id for m in self.wizard.picks):
+            await interaction.response.send_message(
+                f"{member.mention} is already in the draft order. Pick someone else.",
+                ephemeral=True,
+            )
+            return
+
+        self.wizard.picks.append(member)
+        await self.wizard._advance(interaction)
+
+    async def _on_cancel(self, interaction: discord.Interaction):
+        for child in self.children:
+            child.disabled = True
+        await interaction.response.edit_message(
+            content="Draft order setup cancelled. Nothing was saved.", view=self
+        )
 
 
 class Draft(commands.Cog):
