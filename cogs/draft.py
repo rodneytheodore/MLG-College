@@ -115,6 +115,19 @@ def build_eligible_teams_embed(draft: dict) -> discord.Embed:
     return embed
 
 
+def build_pick_announcement_embed(team_info: dict, member: discord.Member, pick_number: int) -> discord.Embed:
+    """Posted to #team-draft the moment a pick is made."""
+    embed = discord.Embed(
+        title=f"🏈 Pick {pick_number} — {team_info['name']}",
+        description=f"Drafted by {member.mention}",
+        color=int(team_info["color"], 16) if team_info.get("color") else discord.Color.gold(),
+    )
+    logo = team_info.get("logoDark") or team_info.get("logo")
+    if logo:
+        embed.set_thumbnail(url=logo)
+    return embed
+
+
 # ---- Step 1: how many teams (modal — just a number, no lookup needed) ----
 
 class TeamCountModal(discord.ui.Modal, title="Draft Setup — Team Count"):
@@ -433,6 +446,8 @@ async def _finalize_pick(interaction: discord.Interaction, abbr: str):
     if channel is None:
         return
 
+    pick_number = current_pick + 1
+    await channel.send(embed=build_pick_announcement_embed(teams[abbr], interaction.user, pick_number))
     await channel.send(embeds=[build_draft_order_embed(draft), build_eligible_teams_embed(draft)])
 
     if draft["status"] == "complete":
