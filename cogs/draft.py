@@ -72,12 +72,12 @@ def build_draft_order_embed(draft: dict) -> discord.Embed:
 
 
 def build_eligible_teams_embed(draft: dict) -> discord.Embed:
-    """Running list of every eligible team, showing who picked it (if anyone).
-    Falls back to the full team pool when no eligible_teams restriction is set."""
-    teams = load_teams()
+    """Running list of every eligible team, grouped by conference, showing
+    who picked it (if anyone). Falls back to the full team pool when no
+    eligible_teams restriction is set."""
+    by_conf = load_teams_by_conference()
     eligible = draft.get("eligible_teams")
-    abbrs = eligible if eligible else list(teams.keys())
-    abbrs_sorted = sorted(abbrs, key=lambda a: teams.get(a, {}).get("school") or teams.get(a, {}).get("name", a))
+    eligible_set = set(eligible) if eligible else None
 
     picked_map = {
         entry["picked_team"]: entry["user_id"]
@@ -85,21 +85,33 @@ def build_eligible_teams_embed(draft: dict) -> discord.Embed:
         if entry.get("picked_team")
     }
 
-    lines = []
-    for abbr in abbrs_sorted:
-        team = teams.get(abbr, {})
-        name = team.get("school") or team.get("name", abbr)
-        if abbr in picked_map:
-            lines.append(f"✅ {name} — <@{picked_map[abbr]}>")
-        else:
-            lines.append(f"⬜ {name}")
+    total_teams = 0
+    section_blocks = []
 
-    embed = discord.Embed(
-        title="🏈 Eligible Teams",
-        description="\n".join(lines) if lines else "*(no eligible teams set)*",
-        color=discord.Color.gold(),
-    )
-    embed.set_footer(text=f"{len(picked_map)}/{len(abbrs_sorted)} teams picked")
+    for conf in sorted(by_conf.keys()):
+        conf_teams = by_conf[conf]
+        if eligible_set is not None:
+            conf_teams = [t for t in conf_teams if t["abbr"].upper() in eligible_set]
+        if not conf_teams:
+            continue
+
+        conf_teams_sorted = sorted(conf_teams, key=lambda t: t.get("school") or t["name"])
+        lines = []
+        for t in conf_teams_sorted:
+            abbr = t["abbr"].upper()
+            name = t.get("school") or t["name"]
+            total_teams += 1
+            if abbr in picked_map:
+                lines.append(f"✅ {name} — <@{picked_map[abbr]}>")
+            else:
+                lines.append(f"⬜ {name}")
+
+        section_blocks.append(f"**{conf}**\n" + "\n".join(lines))
+
+    description = "\n\n".join(section_blocks) if section_blocks else "*(no eligible teams set)*"
+
+    embed = discord.Embed(title="🏈 Eligible Teams", description=description, color=discord.Color.gold())
+    embed.set_footer(text=f"{len(picked_map)}/{total_teams} teams picked")
     return embed
 
 
