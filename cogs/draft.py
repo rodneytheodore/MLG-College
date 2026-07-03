@@ -65,7 +65,7 @@ def build_draft_order_embed(draft: dict) -> discord.Embed:
     embed = discord.Embed(
         title="🏈 Draft Order" if status != "complete" else "🏈 Draft Complete",
         description="\n".join(lines_out),
-        color=discord.Color.green() if status == "complete" else discord.Color.blurple(),
+        color=discord.Color.green() if status == "complete" else discord.Color.gold(),
     )
     embed.set_footer(text=f"{len(order)} participants")
     return embed
