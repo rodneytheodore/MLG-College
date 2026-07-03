@@ -28,6 +28,24 @@ def save_draft(data: dict):
         json.dump(data, f, indent=2)
 
 
+DRAFT_CHANNEL_NAMES = ("team-draft", "dynasty-team-draft")
+
+
+async def _post_draft_order(guild: discord.Guild, embed: discord.Embed) -> discord.TextChannel | None:
+    """Finds the draft channel by name (case-insensitive) and posts the embed there.
+    Returns the channel if found and posted, else None."""
+    channel = discord.utils.find(
+        lambda c: isinstance(c, discord.TextChannel) and c.name.lower() in DRAFT_CHANNEL_NAMES,
+        guild.channels,
+    )
+    if channel is None:
+        return None
+
+    await channel.purge(limit=50, check=lambda m: m.author == guild.me)
+    await channel.send(embed=embed)
+    return channel
+
+
 # ---- Step 1: how many teams (modal — just a number, no lookup needed) ----
 
 class TeamCountModal(discord.ui.Modal, title="Draft Setup — Team Count"):
@@ -95,12 +113,23 @@ class DraftOrderWizard:
 
         lines_out = "\n".join(f"`{i + 1:02d}` {m.mention}" for i, m in enumerate(self.picks))
         embed = discord.Embed(
-            title="🏈 Draft Order Set",
+            title="🏈 Draft Order",
             description=lines_out,
             color=discord.Color.blurple(),
         )
         embed.set_footer(text=f"{len(self.picks)} participants")
-        await interaction.response.edit_message(content=None, embed=embed, view=None)
+
+        posted_channel = await _post_draft_order(interaction.guild, embed)
+
+        if posted_channel:
+            summary = f"✅ **Draft order set.** Posted to {posted_channel.mention}."
+        else:
+            summary = (
+                "✅ **Draft order set,** but no `#team-draft` (or `#dynasty-team-draft`) "
+                "channel was found. Create one and re-run `/view_draft_order` to post it there."
+            )
+
+        await interaction.response.edit_message(content=summary, embed=embed, view=None)
 
 
 class PickUserView(discord.ui.View):
@@ -184,6 +213,43 @@ class Draft(commands.Cog):
         )
         embed.set_footer(text=f"{len(order)} participants")
         await send_ephemeral(interaction, embed=embed)
+
+    @app_commands.command(
+        name="post_draft_order",
+        description="(Re)post the draft order to the team-draft channel (admin only)",
+    )
+    async def post_draft_order(self, interaction: discord.Interaction):
+        if not is_admin(interaction):
+            await send_ephemeral(interaction, "Only admins can do that.")
+            return
+
+        draft = load_draft()
+        order = draft.get("order", [])
+        if not order:
+            await send_ephemeral(interaction, "No draft order has been set yet.")
+            return
+
+        current_pick = draft.get("current_pick", 0)
+        lines_out = []
+        for i, entry in enumerate(order):
+            marker = "➡️ " if i == current_pick and draft.get("status") == "drafting" else ""
+            lines_out.append(f"{marker}`{i + 1:02d}` <@{entry['user_id']}>")
+
+        embed = discord.Embed(
+            title="🏈 Draft Order",
+            description="\n".join(lines_out),
+            color=discord.Color.blurple(),
+        )
+        embed.set_footer(text=f"{len(order)} participants")
+
+        posted_channel = await _post_draft_order(interaction.guild, embed)
+        if posted_channel:
+            await send_ephemeral(interaction, f"Posted to {posted_channel.mention}.")
+        else:
+            await send_ephemeral(
+                interaction,
+                "No `#team-draft` (or `#dynasty-team-draft`) channel found. Create one and try again.",
+            )
 
 
 async def setup(bot: commands.Bot):
