@@ -5,8 +5,9 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from utils.data import is_admin
+from utils.data import is_admin, load_roster, save_roster, load_teams, resolve_team
 from utils.responses import send_ephemeral
+from cogs.scheduling import refresh_dashboard
 
 DATA_DIR = os.environ.get("DATA_DIR", "data").strip()
 DRAFT_PATH_NAME = "draft.json"
@@ -44,6 +45,30 @@ async def _post_draft_order(guild: discord.Guild, embed: discord.Embed) -> disco
     await channel.purge(limit=50, check=lambda m: m.author == guild.me)
     await channel.send(embed=embed)
     return channel
+
+
+def build_draft_order_embed(draft: dict) -> discord.Embed:
+    order = draft.get("order", [])
+    current_pick = draft.get("current_pick", 0)
+    status = draft.get("status")
+
+    lines_out = []
+    for i, entry in enumerate(order):
+        marker = "➡️ " if i == current_pick and status == "drafting" else ""
+        picked_note = ""
+        if status in ("drafting", "complete") and i < current_pick:
+            team_abbr = entry.get("picked_team")
+            if team_abbr:
+                picked_note = f" — **{team_abbr}**"
+        lines_out.append(f"{marker}`{i + 1:02d}` <@{entry['user_id']}>{picked_note}")
+
+    embed = discord.Embed(
+        title="🏈 Draft Order" if status != "complete" else "🏈 Draft Complete",
+        description="\n".join(lines_out),
+        color=discord.Color.green() if status == "complete" else discord.Color.blurple(),
+    )
+    embed.set_footer(text=f"{len(order)} participants")
+    return embed
 
 
 # ---- Step 1: how many teams (modal — just a number, no lookup needed) ----
@@ -111,14 +136,7 @@ class DraftOrderWizard:
         }
         save_draft(draft)
 
-        lines_out = "\n".join(f"`{i + 1:02d}` {m.mention}" for i, m in enumerate(self.picks))
-        embed = discord.Embed(
-            title="🏈 Draft Order",
-            description=lines_out,
-            color=discord.Color.blurple(),
-        )
-        embed.set_footer(text=f"{len(self.picks)} participants")
-
+        embed = build_draft_order_embed(draft)
         posted_channel = await _post_draft_order(interaction.guild, embed)
 
         if posted_channel:
@@ -177,9 +195,143 @@ class PickUserView(discord.ui.View):
         )
 
 
+async def _announce_current_pick(channel: discord.TextChannel, draft: dict):
+    """Posts the on-the-clock ping with a Make Your Pick button for the current picker."""
+    order = draft["order"]
+    current_pick = draft["current_pick"]
+    picker_id = order[current_pick]["user_id"]
+    view = DraftPickButtonView()
+    await channel.send(
+        content=f"<@{picker_id}> you're on the clock! Pick {current_pick + 1} of {len(order)}.",
+        view=view,
+    )
+
+
+class TeamPickModal(discord.ui.Modal, title="Make Your Draft Pick"):
+    team_input = discord.ui.TextInput(
+        label="Team",
+        placeholder="e.g. Georgia or UGA",
+        required=True,
+        max_length=60,
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        # Reload fresh — another admin/user action may have changed state since the button was shown.
+        draft = load_draft()
+
+        if draft.get("status") != "drafting":
+            await interaction.response.send_message("The draft isn't currently in progress.", ephemeral=True)
+            return
+
+        order = draft.get("order", [])
+        current_pick = draft.get("current_pick", 0)
+
+        if current_pick >= len(order):
+            await interaction.response.send_message("The draft is already complete.", ephemeral=True)
+            return
+
+        expected_user_id = order[current_pick]["user_id"]
+        if interaction.user.id != expected_user_id:
+            await interaction.response.send_message(
+                f"It's not your turn. <@{expected_user_id}> is currently picking.", ephemeral=True
+            )
+            return
+
+        teams = load_teams()
+        abbr, error = resolve_team(self.team_input.value, teams)
+        if error:
+            await interaction.response.send_message(error, ephemeral=True)
+            return
+
+        roster = load_roster()
+        if abbr in roster:
+            owner_id = roster[abbr]["user_id"]
+            await interaction.response.send_message(
+                f"`{abbr}` is already claimed by <@{owner_id}>. Click **Make Your Pick** again to try a different team.",
+                ephemeral=True,
+            )
+            return
+
+        roster[abbr] = {"user_id": interaction.user.id, "username": str(interaction.user)}
+        save_roster(roster)
+
+        order[current_pick]["picked_team"] = abbr
+        draft["current_pick"] = current_pick + 1
+        if draft["current_pick"] >= len(order):
+            draft["status"] = "complete"
+        save_draft(draft)
+
+        bot = interaction.client
+        roster_cog = bot.get_cog("Roster")
+        if roster_cog is not None:
+            await roster_cog.refresh_roster_channel()
+        await refresh_dashboard(bot)
+
+        team_name = teams[abbr]["name"]
+        await interaction.response.send_message(f"✅ You picked **{team_name}**!", ephemeral=True)
+
+        channel = discord.utils.find(
+            lambda c: isinstance(c, discord.TextChannel) and c.name.lower() in DRAFT_CHANNEL_NAMES,
+            interaction.guild.channels,
+        )
+        if channel is None:
+            return
+
+        await channel.send(embed=build_draft_order_embed(draft))
+
+        if draft["status"] == "complete":
+            await channel.send("🎉 **The draft is complete!** All teams have been claimed.")
+        else:
+            await _announce_current_pick(channel, draft)
+
+
+class DraftPickButtonView(discord.ui.View):
+    """Persistent button posted alongside each on-the-clock announcement.
+    Reloads draft state fresh on every click, so it works correctly even
+    after a bot restart or if multiple messages are visible at once."""
+
+    def __init__(self):
+        super().__init__(timeout=None)
+        btn = discord.ui.Button(
+            label="Make Your Pick",
+            style=discord.ButtonStyle.success,
+            custom_id="draft_make_pick",
+        )
+        btn.callback = self._on_click
+        self.add_item(btn)
+
+    async def _on_click(self, interaction: discord.Interaction):
+        draft = load_draft()
+
+        if draft.get("status") != "drafting":
+            await interaction.response.send_message("The draft isn't currently in progress.", ephemeral=True)
+            return
+
+        order = draft.get("order", [])
+        current_pick = draft.get("current_pick", 0)
+
+        if current_pick >= len(order):
+            await interaction.response.send_message("The draft is already complete.", ephemeral=True)
+            return
+
+        expected_user_id = order[current_pick]["user_id"]
+        if interaction.user.id != expected_user_id:
+            await interaction.response.send_message(
+                f"It's not your turn. <@{expected_user_id}> is currently picking.", ephemeral=True
+            )
+            return
+
+        await interaction.response.send_modal(TeamPickModal())
+
+
 class Draft(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+
+    def register_active_views(self):
+        """Registers the persistent Make Your Pick button so it keeps working
+        after a bot restart. Safe to call even when no draft is active."""
+        self.bot.add_view(DraftPickButtonView())
 
     @app_commands.command(
         name="set_draft_order",
@@ -194,25 +346,11 @@ class Draft(commands.Cog):
     @app_commands.command(name="view_draft_order", description="View the current draft order")
     async def view_draft_order(self, interaction: discord.Interaction):
         draft = load_draft()
-        order = draft.get("order", [])
-
-        if not order:
+        if not draft.get("order"):
             await send_ephemeral(interaction, "No draft order has been set yet.")
             return
 
-        current_pick = draft.get("current_pick", 0)
-        lines_out = []
-        for i, entry in enumerate(order):
-            marker = "➡️ " if i == current_pick and draft.get("status") == "drafting" else ""
-            lines_out.append(f"{marker}`{i + 1:02d}` <@{entry['user_id']}>")
-
-        embed = discord.Embed(
-            title="🏈 Draft Order",
-            description="\n".join(lines_out),
-            color=discord.Color.blurple(),
-        )
-        embed.set_footer(text=f"{len(order)} participants")
-        await send_ephemeral(interaction, embed=embed)
+        await send_ephemeral(interaction, embed=build_draft_order_embed(draft))
 
     @app_commands.command(
         name="post_draft_order",
@@ -224,31 +362,54 @@ class Draft(commands.Cog):
             return
 
         draft = load_draft()
-        order = draft.get("order", [])
-        if not order:
+        if not draft.get("order"):
             await send_ephemeral(interaction, "No draft order has been set yet.")
             return
 
-        current_pick = draft.get("current_pick", 0)
-        lines_out = []
-        for i, entry in enumerate(order):
-            marker = "➡️ " if i == current_pick and draft.get("status") == "drafting" else ""
-            lines_out.append(f"{marker}`{i + 1:02d}` <@{entry['user_id']}>")
-
-        embed = discord.Embed(
-            title="🏈 Draft Order",
-            description="\n".join(lines_out),
-            color=discord.Color.blurple(),
-        )
-        embed.set_footer(text=f"{len(order)} participants")
-
-        posted_channel = await _post_draft_order(interaction.guild, embed)
+        posted_channel = await _post_draft_order(interaction.guild, build_draft_order_embed(draft))
         if posted_channel:
             await send_ephemeral(interaction, f"Posted to {posted_channel.mention}.")
         else:
             await send_ephemeral(
                 interaction,
                 "No `#team-draft` (or `#dynasty-team-draft`) channel found. Create one and try again.",
+            )
+
+    @app_commands.command(
+        name="start_draft",
+        description="Kick off the team draft — opens picking for pick #1 (admin only)",
+    )
+    async def start_draft(self, interaction: discord.Interaction):
+        if not is_admin(interaction):
+            await send_ephemeral(interaction, "Only admins can start the draft.")
+            return
+
+        draft = load_draft()
+        if not draft.get("order"):
+            await send_ephemeral(interaction, "No draft order has been set yet. Run `/set_draft_order` first.")
+            return
+        if draft.get("status") == "drafting":
+            await send_ephemeral(interaction, "The draft is already in progress.")
+            return
+        if draft.get("status") == "complete":
+            await send_ephemeral(interaction, "The draft has already been completed.")
+            return
+
+        draft["status"] = "drafting"
+        draft["current_pick"] = 0
+        save_draft(draft)
+
+        embed = build_draft_order_embed(draft)
+        posted_channel = await _post_draft_order(interaction.guild, embed)
+
+        if posted_channel:
+            await _announce_current_pick(posted_channel, draft)
+            await send_ephemeral(interaction, f"✅ Draft started. Announced in {posted_channel.mention}.")
+        else:
+            await send_ephemeral(
+                interaction,
+                "✅ Draft started, but no `#team-draft` channel was found to announce it. "
+                "Create the channel and run `/post_draft_order`.",
             )
 
 

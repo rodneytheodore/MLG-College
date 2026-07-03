@@ -38,6 +38,11 @@ class MLGBot(commands.Bot):
             scheme_cards_cog.register_active_views()
             print("Registered persistent views for scheme card buttons.")
 
+        draft_cog = self.get_cog("Draft")
+        if draft_cog is not None:
+            draft_cog.register_active_views()
+            print("Registered persistent view for draft pick button.")
+
         guild = discord.Object(id=GUILD_ID)
 
         # Copy the currently-registered global commands into the guild bucket
