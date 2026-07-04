@@ -7,7 +7,7 @@ from discord.ext import commands
 
 from utils.data import is_admin, load_roster, save_roster, load_teams, load_teams_by_conference
 from utils.responses import send_ephemeral, send_ephemeral_followup
-from cogs.scheduling import refresh_dashboard
+from cogs.scheduling import refresh_dashboard, find_mlg_mention
 
 DATA_DIR = os.environ.get("DATA_DIR", "data").strip()
 DRAFT_PATH_NAME = "draft.json"
@@ -218,9 +218,12 @@ class DraftOrderWizard:
             interaction.guild.text_channels,
         )
         if ann_channel:
+            mlg_mention = find_mlg_mention(interaction.guild)
+            prefix = f"{mlg_mention}\n" if mlg_mention else ""
             await ann_channel.send(
-                f"📋 **Draft order is set!** {len(self.picks)} participant(s) are locked in.\n"
-                f"{eligible_note} Head to {team_draft_ref} to see the full draft order and browse eligible teams."
+                f"{prefix}📋 **Draft order is set!** {len(self.picks)} participant(s) are locked in.\n"
+                f"{eligible_note} Head to {team_draft_ref} to see the full draft order and browse eligible teams.",
+                allowed_mentions=discord.AllowedMentions(roles=True),
             )
 
         warning = ""
