@@ -5,7 +5,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from utils.data import is_admin, load_roster, save_roster, load_teams, load_teams_by_conference
+from utils.data import is_admin, load_roster, save_roster, load_teams, load_teams_by_conference, resolve_team
 from utils.responses import send_ephemeral, send_ephemeral_followup
 from cogs.scheduling import refresh_dashboard, find_mlg_mention
 
@@ -123,7 +123,8 @@ def build_eligible_teams_embed(draft: dict) -> discord.Embed:
     description = "\n\n".join(section_blocks) if section_blocks else "*(no eligible teams set)*"
 
     embed = discord.Embed(title="🏈 Eligible Teams", description=description, color=discord.Color.gold())
-    embed.set_footer(text=f"{len(picked_map)}/{total_teams} teams picked")
+    participant_count = len(draft.get("order", []))
+    embed.set_footer(text=f"{len(picked_map)}/{participant_count} picked · {total_teams} eligible teams total")
     return embed
 
 
@@ -878,6 +879,56 @@ class EligibleConferenceSelectView(discord.ui.View):
         await wizard.start(interaction)
 
 
+class SetTeamLimitsModal(discord.ui.Modal, title="Adjust Team Limits"):
+    min_input = discord.ui.TextInput(
+        label="Minimum teams per conference",
+        placeholder="e.g. 1",
+        required=True,
+        max_length=2,
+    )
+    max_input = discord.ui.TextInput(
+        label="Maximum teams per conference",
+        placeholder="e.g. 3",
+        required=True,
+        max_length=2,
+    )
+
+    def __init__(self):
+        super().__init__()
+        draft = load_draft()
+        current_min = draft.get("team_min_per_conference")
+        current_max = draft.get("team_max_per_conference")
+        if current_min is not None:
+            self.min_input.default = str(current_min)
+        if current_max is not None:
+            self.max_input.default = str(current_max)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        min_raw = self.min_input.value.strip()
+        max_raw = self.max_input.value.strip()
+
+        if not min_raw.isdigit() or not max_raw.isdigit():
+            await interaction.response.send_message("Enter whole numbers for both fields.", ephemeral=True)
+            return
+
+        min_v, max_v = int(min_raw), int(max_raw)
+        if min_v > max_v:
+            await interaction.response.send_message(
+                f"Minimum ({min_v}) can't exceed maximum ({max_v}).", ephemeral=True
+            )
+            return
+
+        draft = load_draft()
+        draft["team_min_per_conference"] = min_v
+        draft["team_max_per_conference"] = max_v
+        save_draft(draft)
+
+        await interaction.response.send_message(
+            f"✅ Updated: **{min_v}–{max_v} teams per conference.**", ephemeral=True
+        )
+        await _post_draft_order(interaction.guild, [build_draft_order_embed(draft), build_eligible_teams_embed(draft)])
+
+
 class Draft(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -916,6 +967,113 @@ class Draft(commands.Cog):
             view=EligibleConferenceSelectView(),
             ephemeral=True,
         )
+
+    @app_commands.command(
+        name="add_eligible_team",
+        description="Add a single team to the eligible pool (admin only)",
+    )
+    @app_commands.describe(team="Team name or abbreviation to add")
+    async def add_eligible_team(self, interaction: discord.Interaction, team: str):
+        if not is_admin(interaction):
+            await send_ephemeral(interaction, "Only admins can modify eligible teams.")
+            return
+
+        draft = load_draft()
+        if draft.get("status") in ("drafting", "complete"):
+            await send_ephemeral(interaction, "Can't change eligible teams after the draft has started.")
+            return
+
+        teams = load_teams()
+        abbr, error = resolve_team(team, teams)
+        if error:
+            await send_ephemeral(interaction, error)
+            return
+
+        eligible = draft.setdefault("eligible_teams", [])
+        if abbr in eligible:
+            await send_ephemeral(interaction, f"**{teams[abbr]['name']}** is already in the eligible pool.")
+            return
+
+        eligible.append(abbr)
+        save_draft(draft)
+
+        await send_ephemeral(interaction, f"✅ Added **{teams[abbr]['name']}** to the eligible pool ({len(eligible)} total).")
+        await _post_draft_order(interaction.guild, [build_draft_order_embed(draft), build_eligible_teams_embed(draft)])
+
+    @app_commands.command(
+        name="remove_eligible_team",
+        description="Remove a single team from the eligible pool (admin only)",
+    )
+    @app_commands.describe(team="Team name or abbreviation to remove")
+    async def remove_eligible_team(self, interaction: discord.Interaction, team: str):
+        if not is_admin(interaction):
+            await send_ephemeral(interaction, "Only admins can modify eligible teams.")
+            return
+
+        draft = load_draft()
+        if draft.get("status") in ("drafting", "complete"):
+            await send_ephemeral(interaction, "Can't change eligible teams after the draft has started.")
+            return
+
+        teams = load_teams()
+        abbr, error = resolve_team(team, teams)
+        if error:
+            await send_ephemeral(interaction, error)
+            return
+
+        eligible = draft.get("eligible_teams", [])
+        if abbr not in eligible:
+            await send_ephemeral(interaction, f"**{teams[abbr]['name']}** isn't in the eligible pool.")
+            return
+
+        eligible.remove(abbr)
+        draft["eligible_teams"] = eligible
+        save_draft(draft)
+
+        await send_ephemeral(interaction, f"✅ Removed **{teams[abbr]['name']}** from the eligible pool ({len(eligible)} remaining).")
+        await _post_draft_order(interaction.guild, [build_draft_order_embed(draft), build_eligible_teams_embed(draft)])
+
+    @app_commands.command(
+        name="set_team_limits",
+        description="Adjust the global min/max teams per conference without redoing team selection (admin only)",
+    )
+    async def set_team_limits(self, interaction: discord.Interaction):
+        if not is_admin(interaction):
+            await send_ephemeral(interaction, "Only admins can modify draft limits.")
+            return
+
+        draft = load_draft()
+        if draft.get("status") in ("drafting", "complete"):
+            await send_ephemeral(interaction, "Can't change draft limits after the draft has started.")
+            return
+
+        await interaction.response.send_modal(SetTeamLimitsModal())
+
+    @add_eligible_team.autocomplete("team")
+    async def add_eligible_team_autocomplete(self, interaction: discord.Interaction, current: str):
+        teams = load_teams()
+        draft = load_draft()
+        eligible = set(draft.get("eligible_teams", []))
+        current_lower = current.lower()
+        matches = [
+            t for abbr, t in teams.items()
+            if abbr not in eligible
+            and (current_lower in t["name"].lower() or current_lower in abbr.lower())
+        ]
+        return [app_commands.Choice(name=t["name"], value=t["abbr"]) for t in matches[:25]]
+
+    @remove_eligible_team.autocomplete("team")
+    async def remove_eligible_team_autocomplete(self, interaction: discord.Interaction, current: str):
+        teams = load_teams()
+        draft = load_draft()
+        eligible = set(draft.get("eligible_teams", []))
+        current_lower = current.lower()
+        matches = [
+            t for abbr, t in teams.items()
+            if abbr in eligible
+            and (current_lower in t["name"].lower() or current_lower in abbr.lower())
+        ]
+        return [app_commands.Choice(name=t["name"], value=t["abbr"]) for t in matches[:25]]
 
     @app_commands.command(name="view_draft_order", description="View the current draft order")
     async def view_draft_order(self, interaction: discord.Interaction):
