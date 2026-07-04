@@ -302,12 +302,15 @@ class PickUserView(discord.ui.View):
         self.add_item(cancel_btn)
 
     async def _on_select(self, interaction: discord.Interaction):
-        # discord.py resolves UserSelect values directly on the component
+        # discord.py resolves UserSelect values directly on the component.
+        # Discord sometimes resolves the invoker's own selection as a plain
+        # User (no guild member data attached) rather than a Member — accept
+        # either, since only id/mention/display name are actually needed here.
         member = self.children[0].values[0]
 
-        if not isinstance(member, discord.Member):
+        if not isinstance(member, (discord.Member, discord.User)):
             await interaction.response.send_message(
-                "Couldn't resolve that selection to a server member. Try again.", ephemeral=True
+                "Couldn't resolve that selection to a user. Try again.", ephemeral=True
             )
             return
 
