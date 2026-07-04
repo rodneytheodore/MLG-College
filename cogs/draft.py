@@ -204,6 +204,15 @@ class DraftOrderWizard:
         else:
             eligible_note = "No eligible teams restriction has been set — the full team pool is currently in play."
 
+        if posted_channel:
+            await posted_channel.send(
+                f"**How the draft works:**\n"
+                f"• When it's your turn, you'll get pinged here with a **Make Your Pick** button.\n"
+                f"• Click it, pick a conference, then pick your team from that conference.\n"
+                f"• Only the person on the clock can pick — the draft won't let anyone go out of turn.\n"
+                f"• Once you pick, the draft automatically moves to the next person."
+            )
+
         ann_channel = discord.utils.find(
             lambda c: c.name.lower() in ("announcements", "announcement"),
             interaction.guild.text_channels,
