@@ -26,6 +26,12 @@ from cogs.scheme_cards import build_compact_scheme_card_embed, ExpandSchemeCardV
 EASTERN = ZoneInfo("America/New_York")
 
 
+def find_mlg_mention(guild: discord.Guild) -> str:
+    """Returns the @MLG Dynasty role mention if that role exists, else empty string."""
+    role = discord.utils.find(lambda r: r.name.lower() == "mlg dynasty", guild.roles)
+    return role.mention if role else ""
+
+
 def now_eastern() -> datetime:
     return datetime.now(EASTERN)
 
@@ -611,9 +617,10 @@ class AdvanceWeekWizard:
                     deadline=deadline,
                     cpu_deadline=cpu_deadline,
                 )
-                await ann_channel.send(msg)
-
-            stage_label = PHASE_DISPLAY.get(self.current_stage, self.current_stage)
+                await ann_channel.send(
+                    f"{find_mlg_mention(guild)} {msg}".strip(),
+                    allowed_mentions=discord.AllowedMentions(roles=True),
+                )
             await interaction.followup.send(
                 f"✅ Advanced to **{stage_label} — {week_label}**.", ephemeral=True
             )
@@ -705,7 +712,10 @@ class AdvanceWeekWizard:
                 cpu_deadline=None if (old_stage == "preseason" and not self.week0_has_games) else cpu_deadline,
                 general_deadline=deadline if (old_stage == "preseason" and not self.week0_has_games) else None,
             )
-            await ann_channel.send(msg)
+            await ann_channel.send(
+                f"{find_mlg_mention(guild)} {msg}".strip(),
+                allowed_mentions=discord.AllowedMentions(roles=True),
+            )
 
         new_label = PHASE_DISPLAY.get(new_stage, new_stage)
         await interaction.followup.send(f"✅ Advanced to **{new_label}**.", ephemeral=True)
@@ -748,7 +758,10 @@ class AdvanceWeekWizard:
                 deadline=deadline,
                 cpu_deadline=cpu_deadline,
             )
-            await ann_channel.send(msg)
+            await ann_channel.send(
+                f"{find_mlg_mention(guild)} {msg}".strip(),
+                allowed_mentions=discord.AllowedMentions(roles=True),
+            )
 
         await interaction.followup.send(
             f"✅ Rolled over to **{new_year}**. Season archived, stage reset to Preseason. "
@@ -1022,7 +1035,10 @@ async def _do_advance_week(
             deadline=deadline,
             cpu_deadline=cpu_deadline,
         )
-        await ann_channel.send(message_text)
+        await ann_channel.send(
+            f"{find_mlg_mention(guild)} {message_text}".strip(),
+            allowed_mentions=discord.AllowedMentions(roles=True),
+        )
 
     phase_msg = f" — now in **{PHASE_DISPLAY[new_phase]}**" if new_phase else ""
     await interaction.followup.send(
@@ -1071,15 +1087,18 @@ class NewDynastyConfirmView(discord.ui.View):
             interaction.guild.text_channels
         )
         if ann_channel:
+            mlg_mention = find_mlg_mention(interaction.guild)
+            prefix = f"{mlg_mention}\n" if mlg_mention else ""
             await ann_channel.send(
-                f"🚨 **The wait is over. A new dynasty begins now.** 🏈\n"
+                f"{prefix}🚨 **The wait is over. A new dynasty begins now.** 🏈\n"
                 f"Welcome to College Football 27! The road to a championship starts with the **Team Draft**, "
                 f"where every program's future is on the line.\n\n"
                 f"Draft order and format will be announced shortly. In the meantime, start thinking about the "
                 f"kind of program you want to build. Explore the teams you're interested in turning into the "
                 f"next powerhouse, dive into offensive and defensive schemes that fit your coaching style, and "
                 f"get familiar with the new Dynasty Mode features and additions that could shape your strategy.\n\n"
-                f"Do your homework. Build your board. Your dynasty starts now."
+                f"Do your homework. Build your board. Your dynasty starts now.",
+                allowed_mentions=discord.AllowedMentions(roles=True),
             )
 
         for child in self.children:
