@@ -149,6 +149,12 @@ class TeamCountModal(discord.ui.Modal, title="Draft Setup — Team Count"):
         required=True,
         max_length=2,
     )
+    draft_day_input = discord.ui.TextInput(
+        label="Draft Day (optional)",
+        placeholder="e.g. Saturday, July 12 at 8 PM ET — leave blank for TBD",
+        required=False,
+        max_length=100,
+    )
 
     async def on_submit(self, interaction: discord.Interaction):
         raw = self.team_count_input.value.strip()
@@ -164,15 +170,18 @@ class TeamCountModal(discord.ui.Modal, title="Draft Setup — Team Count"):
             )
             return
 
-        wizard = DraftOrderWizard(team_count=count)
+        draft_day = self.draft_day_input.value.strip() or None
+
+        wizard = DraftOrderWizard(team_count=count, draft_day=draft_day)
         await wizard.start(interaction)
 
 
 # ---- Step 2: sequential native user picker, one pick at a time ----
 
 class DraftOrderWizard:
-    def __init__(self, team_count: int):
+    def __init__(self, team_count: int, draft_day: str | None = None):
         self.team_count = team_count
+        self.draft_day = draft_day
         self.picks: list[discord.Member] = []
 
     async def start(self, interaction: discord.Interaction):
@@ -203,6 +212,7 @@ class DraftOrderWizard:
             "order": [{"user_id": m.id, "username": str(m)} for m in self.picks],
             "current_pick": 0,
             "status": "order_set",
+            "draft_day": self.draft_day,
         })
         save_draft(draft)
 
@@ -243,6 +253,7 @@ class DraftOrderWizard:
             prefix = f"{mlg_mention}\n" if mlg_mention else ""
             await ann_channel.send(
                 f"{prefix}📋 **Draft order is set!** {len(self.picks)} participant(s) are locked in.\n"
+                f"🗓️ **Draft Day:** {self.draft_day or 'TBD'}\n"
                 f"{eligible_note} Head to {team_draft_ref} to see the full draft order and browse eligible teams."
                 f"{waitlist_note}",
                 allowed_mentions=discord.AllowedMentions(roles=True),
