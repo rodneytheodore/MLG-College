@@ -1066,22 +1066,20 @@ class NewDynastyConfirmView(discord.ui.View):
 
         await refresh_dashboard(interaction.client)
 
-        settings = load_settings()
-        scheme_channel_id = settings.get("scheme_cards_channel_id")
-        roster_channel_id = settings.get("roster_channel_id")
-        scheme_ref = f"<#{scheme_channel_id}>" if scheme_channel_id else "#scheme-declaration"
-        roster_ref = f"<#{roster_channel_id}>" if roster_channel_id else "#roster"
-
         ann_channel = discord.utils.find(
             lambda c: c.name.lower() in ("announcements", "announcement"),
             interaction.guild.text_channels
         )
         if ann_channel:
             await ann_channel.send(
-                f"🏈 **A new dynasty has begun — {self.new_year}!** The team draft is up first — "
-                f"admins will kick it off shortly with `/start_draft`. Once your team is assigned, submit "
-                f"your scheme card in {scheme_ref} and keep an eye on {roster_ref} for the full league lineup. "
-                f"Let's get it!"
+                f"🚨 **The wait is over. A new dynasty begins now.** 🏈\n"
+                f"Welcome to College Football 27! The road to a championship starts with the **Team Draft**, "
+                f"where every program's future is on the line.\n\n"
+                f"Draft order and format will be announced shortly. In the meantime, start thinking about the "
+                f"kind of program you want to build. Explore the teams you're interested in turning into the "
+                f"next powerhouse, dive into offensive and defensive schemes that fit your coaching style, and "
+                f"get familiar with the new Dynasty Mode features and additions that could shape your strategy.\n\n"
+                f"Do your homework. Build your board. Your dynasty starts now."
             )
 
         for child in self.children:
