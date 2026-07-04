@@ -75,7 +75,8 @@ def build_draft_order_embed(draft: dict) -> discord.Embed:
         description="\n".join(lines_out),
         color=discord.Color.green() if status == "complete" else discord.Color.gold(),
     )
-    footer = f"{len(order)} participants"
+    claimed_count = sum(1 for e in order if e.get("picked_team"))
+    footer = f"{claimed_count}/{len(order)} teams claimed"
     if show_waitlist:
         footer += f" · {len(waitlist)} on waitlist"
     embed.set_footer(text=footer)
