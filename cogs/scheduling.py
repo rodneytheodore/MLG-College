@@ -149,6 +149,14 @@ async def refresh_dashboard(bot: commands.Bot):
 
 
 PHASE_TRANSITIONS = {
+    "team_draft": {
+        "display": "🏈 Team Draft",
+        "next": "preseason",
+        "week_reset": None,
+        "has_weeks": False,
+        "week_cap": None,
+        "early_switch_allowed": False,
+    },
     "preseason": {
         "display": "Preseason",
         "next": "regular_season",
@@ -243,6 +251,7 @@ def get_announcement_message(current_phase: str, new_phase: str | None, week: in
         ("postseason", None): f"🏈 **Postseason Week {week} is live!** Next round matchups are set. Find your thread and get scheduled.{both_dl}",
 
         ("offseason_transfer_portal", None): f"🔄 **Transfer Portal Week {week} is now live!**{both_dl}",
+        ("team_draft", "preseason"): f"🏈 **The draft is complete and Preseason has begun!** Rosters are locked in — time to scout players and get your program ready.{both_dl}",
         ("preseason", "regular_season"): f"🚨 **The Regular Season has begun!** Week 0 kicks things off. Time to offer scholarships!{both_dl}",
         ("regular_season", "conference_championships"): f"🏆 **Conference Championship Week!** The regular season is over. Conference Championship matchups have been set — this is what you played for. Don't let up now.{both_dl}",
         ("conference_championships", "postseason"): f"🎉 **Postseason is here!** Bowl season and Playoff matchups are live. Check your game thread and get scheduled.{both_dl}",
@@ -639,6 +648,18 @@ class AdvanceWeekWizard:
             await interaction.followup.send("No next phase defined from the current stage.", ephemeral=True)
             return
 
+        # Team Draft → Preseason requires the draft to actually be finished
+        if old_stage == "team_draft":
+            from cogs.draft import load_draft
+            draft = load_draft()
+            if draft.get("status") != "complete":
+                await interaction.followup.send(
+                    "The team draft hasn't been completed yet. Use `/set_draft_order`, "
+                    "`/set_eligible_teams` (optional), and `/start_draft` to run it, then try again.",
+                    ephemeral=True,
+                )
+                return
+
         # encourage_transfers → preseason requires a year rollover
         if old_stage == "offseason_encourage_transfers":
             await self._execute_year_rollover(interaction, season, deadline, cpu_deadline)
@@ -1030,10 +1051,14 @@ class NewDynastyConfirmView(discord.ui.View):
         save_roster({})
         save_season({
             "year": self.new_year,
-            "current_stage": "preseason",
+            "current_stage": "team_draft",
             "current_week": None,
             "weeks": {},
         })
+
+        # Fresh draft state for the new dynasty — clears any leftover order/eligible list.
+        from cogs.draft import save_draft
+        save_draft({"order": [], "current_pick": 0, "status": "not_set"})
 
         roster_cog = interaction.client.get_cog("Roster")
         if roster_cog is not None:
@@ -1041,15 +1066,22 @@ class NewDynastyConfirmView(discord.ui.View):
 
         await refresh_dashboard(interaction.client)
 
+        settings = load_settings()
+        scheme_channel_id = settings.get("scheme_cards_channel_id")
+        roster_channel_id = settings.get("roster_channel_id")
+        scheme_ref = f"<#{scheme_channel_id}>" if scheme_channel_id else "#scheme-declaration"
+        roster_ref = f"<#{roster_channel_id}>" if roster_channel_id else "#roster"
+
         ann_channel = discord.utils.find(
             lambda c: c.name.lower() in ("announcements", "announcement"),
             interaction.guild.text_channels
         )
         if ann_channel:
             await ann_channel.send(
-                f"🏈 **A new dynasty has begun — {self.new_year}!** Details for team selection will be coming soon! "
-                f"Once your team is assigned, submit your scheme card in #scheme-declaration and keep an eye on "
-                f"#roster for the full league lineup. Let's get it!"
+                f"🏈 **A new dynasty has begun — {self.new_year}!** The team draft is up first — "
+                f"admins will kick it off shortly with `/start_draft`. Once your team is assigned, submit "
+                f"your scheme card in {scheme_ref} and keep an eye on {roster_ref} for the full league lineup. "
+                f"Let's get it!"
             )
 
         for child in self.children:
@@ -1058,7 +1090,7 @@ class NewDynastyConfirmView(discord.ui.View):
         # from when this message was first sent (in /new_dynasty) still applies.
         await interaction.response.edit_message(
             content=f"✅ New dynasty started for **{self.new_year}**. Previous year archived. "
-            f"Roster cleared, season reset to Preseason.",
+            f"Roster cleared, season reset to **Team Draft**. Run `/set_draft_order` to begin.",
             view=self,
         )
 
@@ -1685,7 +1717,7 @@ class Scheduling(commands.Cog):
             f"⚠️ This will archive the current dynasty (year: `{current_year}`, "
             f"{claimed_count} team(s) claimed) and reset everything for **{year}**:\n"
             f"- All team assignments will be cleared\n"
-            f"- The season will reset to Preseason, Week 0\n"
+            f"- The season will reset to **Team Draft** (run `/set_draft_order` to begin)\n"
             f"- Previous weeks' Discord channels/categories are **not** deleted automatically\n\n"
             f"Are you sure?",
             view=view,
