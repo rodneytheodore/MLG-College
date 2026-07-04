@@ -197,6 +197,23 @@ class DraftOrderWizard:
         embed = build_draft_order_embed(draft)
         posted_channel = await _post_draft_order(interaction.guild, [embed, build_eligible_teams_embed(draft)])
 
+        team_draft_ref = f"<#{posted_channel.id}>" if posted_channel else "#team-draft"
+        eligible = draft.get("eligible_teams")
+        if eligible:
+            eligible_note = f"**{len(eligible)} eligible teams** have been set for this draft."
+        else:
+            eligible_note = "No eligible teams restriction has been set — the full team pool is currently in play."
+
+        ann_channel = discord.utils.find(
+            lambda c: c.name.lower() in ("announcements", "announcement"),
+            interaction.guild.text_channels,
+        )
+        if ann_channel:
+            await ann_channel.send(
+                f"📋 **Draft order is set!** {len(self.picks)} participant(s) are locked in.\n"
+                f"{eligible_note} Head to {team_draft_ref} to see the full draft order and browse eligible teams."
+            )
+
         warning = ""
         eligible = draft.get("eligible_teams")
         if eligible and len(eligible) != self.team_count:
