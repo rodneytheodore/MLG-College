@@ -216,6 +216,15 @@ class DraftOrderWizard:
         else:
             eligible_note = "No eligible teams restriction has been set — the full team pool is currently in play."
 
+        waitlist = draft.get("waitlist", [])
+        waitlist_note = ""
+        if waitlist:
+            waitlist_note = (
+                f"\n\nTo everyone on the waitlist — the participant list was a tough decision, and we know "
+                f"it doesn't feel great to be on the outside looking in. Stick around, though — spots in this "
+                f"league always open up, and we'd love to have you in when one does."
+            )
+
         if posted_channel:
             await posted_channel.send(
                 f"**How the draft works:**\n"
@@ -234,7 +243,8 @@ class DraftOrderWizard:
             prefix = f"{mlg_mention}\n" if mlg_mention else ""
             await ann_channel.send(
                 f"{prefix}📋 **Draft order is set!** {len(self.picks)} participant(s) are locked in.\n"
-                f"{eligible_note} Head to {team_draft_ref} to see the full draft order and browse eligible teams.",
+                f"{eligible_note} Head to {team_draft_ref} to see the full draft order and browse eligible teams."
+                f"{waitlist_note}",
                 allowed_mentions=discord.AllowedMentions(roles=True),
             )
 
