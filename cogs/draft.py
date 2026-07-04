@@ -62,12 +62,23 @@ def build_draft_order_embed(draft: dict) -> discord.Embed:
                 picked_note = f" — **{team_abbr}**"
         lines_out.append(f"{marker}`{i + 1:02d}` <@{entry['user_id']}>{picked_note}")
 
+    waitlist = draft.get("waitlist", [])
+    show_waitlist = waitlist and status not in ("drafting", "complete")
+    if show_waitlist:
+        lines_out.append("")
+        lines_out.append("**Waitlist:**")
+        for i, entry in enumerate(waitlist):
+            lines_out.append(f"`{i + 1:02d}` <@{entry['user_id']}>")
+
     embed = discord.Embed(
         title="🏈 Draft Order" if status != "complete" else "🏈 Draft Complete",
         description="\n".join(lines_out),
         color=discord.Color.green() if status == "complete" else discord.Color.gold(),
     )
-    embed.set_footer(text=f"{len(order)} participants")
+    footer = f"{len(order)} participants"
+    if show_waitlist:
+        footer += f" · {len(waitlist)} on waitlist"
+    embed.set_footer(text=footer)
     return embed
 
 
@@ -908,6 +919,61 @@ class Draft(commands.Cog):
             await send_ephemeral(
                 interaction,
                 "No `#team-draft` (or `#dynasty-team-draft`) channel found. Create one and try again.",
+            )
+
+    @app_commands.command(
+        name="add_waitlist",
+        description="Add a user to the draft waitlist (admin only)",
+    )
+    @app_commands.describe(user="The user to add to the waitlist")
+    async def add_waitlist(self, interaction: discord.Interaction, user: discord.Member):
+        if not is_admin(interaction):
+            await send_ephemeral(interaction, "Only admins can manage the waitlist.")
+            return
+
+        draft = load_draft()
+        waitlist = draft.setdefault("waitlist", [])
+
+        if any(w["user_id"] == user.id for w in waitlist):
+            await send_ephemeral(interaction, f"{user.mention} is already on the waitlist.")
+            return
+
+        waitlist.append({"user_id": user.id, "username": str(user)})
+        save_draft(draft)
+
+        await send_ephemeral(interaction, f"Added {user.mention} to the waitlist (#{len(waitlist)}).")
+
+        if draft.get("order"):
+            await _post_draft_order(
+                interaction.guild, [build_draft_order_embed(draft), build_eligible_teams_embed(draft)]
+            )
+
+    @app_commands.command(
+        name="remove_waitlist",
+        description="Remove a user from the draft waitlist (admin only)",
+    )
+    @app_commands.describe(user="The user to remove from the waitlist")
+    async def remove_waitlist(self, interaction: discord.Interaction, user: discord.Member):
+        if not is_admin(interaction):
+            await send_ephemeral(interaction, "Only admins can manage the waitlist.")
+            return
+
+        draft = load_draft()
+        waitlist = draft.get("waitlist", [])
+        new_waitlist = [w for w in waitlist if w["user_id"] != user.id]
+
+        if len(new_waitlist) == len(waitlist):
+            await send_ephemeral(interaction, f"{user.mention} isn't on the waitlist.")
+            return
+
+        draft["waitlist"] = new_waitlist
+        save_draft(draft)
+
+        await send_ephemeral(interaction, f"Removed {user.mention} from the waitlist.")
+
+        if draft.get("order"):
+            await _post_draft_order(
+                interaction.guild, [build_draft_order_embed(draft), build_eligible_teams_embed(draft)]
             )
 
     @app_commands.command(
