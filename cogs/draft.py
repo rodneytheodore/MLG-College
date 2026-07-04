@@ -31,6 +31,14 @@ def save_draft(data: dict):
 
 DRAFT_CHANNEL_NAMES = ("team-draft", "dynasty-team-draft")
 
+DRAFT_GUIDE_TEXT = (
+    "**How the draft works:**\n"
+    "• When it's your turn, you'll get pinged here with a **Make Your Pick** button.\n"
+    "• Click it, pick a conference, then pick your team from that conference.\n"
+    "• Only the person on the clock can pick — the draft won't let anyone go out of turn.\n"
+    "• Once you pick, the draft automatically moves to the next person."
+)
+
 
 async def _post_draft_order(guild: discord.Guild, embeds: list[discord.Embed]) -> discord.TextChannel | None:
     """Finds the draft channel by name (case-insensitive) and posts the embeds there.
@@ -243,13 +251,7 @@ class DraftOrderWizard:
             )
 
         if posted_channel:
-            await posted_channel.send(
-                f"**How the draft works:**\n"
-                f"• When it's your turn, you'll get pinged here with a **Make Your Pick** button.\n"
-                f"• Click it, pick a conference, then pick your team from that conference.\n"
-                f"• Only the person on the clock can pick — the draft won't let anyone go out of turn.\n"
-                f"• Once you pick, the draft automatically moves to the next person."
-            )
+            await posted_channel.send(DRAFT_GUIDE_TEXT)
 
         ann_channel = discord.utils.find(
             lambda c: c.name.lower() in ("announcements", "announcement"),
@@ -1103,6 +1105,7 @@ class Draft(commands.Cog):
             interaction.guild, [build_draft_order_embed(draft), build_eligible_teams_embed(draft)]
         )
         if posted_channel:
+            await posted_channel.send(DRAFT_GUIDE_TEXT)
             await send_ephemeral(interaction, f"Posted to {posted_channel.mention}.")
         else:
             await send_ephemeral(
