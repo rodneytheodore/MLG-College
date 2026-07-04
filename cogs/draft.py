@@ -222,7 +222,13 @@ class DraftOrderWizard:
         team_draft_ref = f"<#{posted_channel.id}>" if posted_channel else "#team-draft"
         eligible = draft.get("eligible_teams")
         if eligible:
-            eligible_note = f"**{len(eligible)} eligible teams** have been set for this draft."
+            abbr_to_conf = _abbr_to_conference()
+            conferences = sorted({abbr_to_conf.get(a.upper()) for a in eligible if abbr_to_conf.get(a.upper())})
+            conf_list = ", ".join(conferences) if conferences else "unknown conferences"
+            eligible_note = (
+                f"**{len(eligible)} eligible teams** across **{len(conferences)} conference(s)** "
+                f"have been set for this draft: {conf_list}."
+            )
         else:
             eligible_note = "No eligible teams restriction has been set — the full team pool is currently in play."
 
