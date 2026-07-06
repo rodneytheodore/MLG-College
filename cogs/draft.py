@@ -470,31 +470,31 @@ async def _finalize_pick(interaction: discord.Interaction, abbr: str):
     draft = load_draft()
 
     if draft.get("status") != "drafting":
-        await interaction.response.edit_message(content="The draft isn't currently in progress.", view=None)
+        await interaction.edit_original_response(content="The draft isn't currently in progress.", view=None)
         return
 
     order = draft.get("order", [])
     current_pick = draft.get("current_pick", 0)
 
     if current_pick >= len(order):
-        await interaction.response.edit_message(content="The draft is already complete.", view=None)
+        await interaction.edit_original_response(content="The draft is already complete.", view=None)
         return
 
     expected_user_id = order[current_pick]["user_id"]
     if interaction.user.id != expected_user_id:
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             content=f"It's not your turn. <@{expected_user_id}> is currently picking.", view=None
         )
         return
 
     teams = load_teams()
     if abbr not in teams:
-        await interaction.response.edit_message(content="That team couldn't be found. Try again.", view=None)
+        await interaction.edit_original_response(content="That team couldn't be found. Try again.", view=None)
         return
 
     eligible = _eligible_set(draft)
     if eligible is not None and abbr not in eligible:
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             content=f"`{abbr}` isn't in the eligible teams list for this draft.", view=None
         )
         return
@@ -502,7 +502,7 @@ async def _finalize_pick(interaction: discord.Interaction, abbr: str):
     roster = load_roster()
     if abbr in roster:
         owner_id = roster[abbr]["user_id"]
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             content=f"`{abbr}` was just claimed by <@{owner_id}>. Click **Make Your Pick** again to choose another team.",
             view=None,
         )
@@ -516,7 +516,7 @@ async def _finalize_pick(interaction: discord.Interaction, abbr: str):
     if conf_max is not None:
         current_conf_count = _picked_counts_by_conference(draft).get(picked_conference, 0)
         if current_conf_count >= conf_max:
-            await interaction.response.edit_message(
+            await interaction.edit_original_response(
                 content=f"**{picked_conference}** has already reached its max of {conf_max} team(s). "
                         f"Click **Make Your Pick** again to choose a different conference.",
                 view=None,
@@ -526,7 +526,7 @@ async def _finalize_pick(interaction: discord.Interaction, abbr: str):
     remaining_slots_after = len(order) - (current_pick + 1)
     deficit_after = _min_deficit_after_pick(draft, picked_conference)
     if deficit_after > remaining_slots_after:
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             content=(
                 f"Picking **{teams[abbr]['name']}** would leave only {remaining_slots_after} pick(s) remaining, "
                 f"but {deficit_after} more pick(s) are still required to satisfy conference minimums. "
@@ -552,7 +552,7 @@ async def _finalize_pick(interaction: discord.Interaction, abbr: str):
     await refresh_dashboard(bot)
 
     team_name = teams[abbr]["name"]
-    await interaction.response.edit_message(content=f"✅ You picked **{team_name}**!", view=None)
+    await interaction.edit_original_response(content=f"✅ You picked **{team_name}**!", view=None)
 
     channel = discord.utils.find(
         lambda c: isinstance(c, discord.TextChannel) and c.name.lower() in DRAFT_CHANNEL_NAMES,
@@ -592,6 +592,10 @@ class TeamPickSelectView(discord.ui.View):
 
     async def _on_select(self, interaction: discord.Interaction):
         abbr = self.children[0].values[0]
+        # Defer immediately — _finalize_pick does Discord API work (roster/
+        # dashboard refreshes) that can exceed the 3-second initial-response
+        # window, which would otherwise cause an "Unknown interaction" error.
+        await interaction.response.defer()
         await _finalize_pick(interaction, abbr)
 
     async def _on_back(self, interaction: discord.Interaction):
@@ -1325,3 +1329,6 @@ class Draft(commands.Cog):
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Draft(bot))
+
+
+
