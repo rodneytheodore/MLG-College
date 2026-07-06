@@ -1153,6 +1153,79 @@ class Draft(commands.Cog):
             )
 
     @app_commands.command(
+        name="refresh_draft_pick",
+        description="Repost the last pick announcement and re-ping the current picker (admin only)",
+    )
+    async def refresh_draft_pick(self, interaction: discord.Interaction):
+        if not is_admin(interaction):
+            await send_ephemeral(interaction, "Only admins can do that.")
+            return
+
+        draft = load_draft()
+        order = draft.get("order", [])
+        current_pick = draft.get("current_pick", 0)
+
+        if current_pick <= 0:
+            await send_ephemeral(interaction, "No picks have been made yet.")
+            return
+
+        last_index = current_pick - 1
+        entry = order[last_index]
+        abbr = entry.get("picked_team")
+
+        if not abbr:
+            await send_ephemeral(interaction, "Couldn't find a completed pick to repost.")
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        teams = load_teams()
+        team_info = teams.get(abbr)
+        if team_info is None:
+            await send_ephemeral_followup(interaction, f"Team `{abbr}` couldn't be found.")
+            return
+
+        member = interaction.guild.get_member(entry["user_id"])
+        if member is None:
+            try:
+                member = await interaction.guild.fetch_member(entry["user_id"])
+            except (discord.NotFound, discord.HTTPException):
+                member = None
+
+        channel = discord.utils.find(
+            lambda c: isinstance(c, discord.TextChannel) and c.name.lower() in DRAFT_CHANNEL_NAMES,
+            interaction.guild.channels,
+        )
+        if channel is None:
+            await send_ephemeral_followup(
+                interaction, "No `#team-draft` (or `#dynasty-team-draft`) channel found."
+            )
+            return
+
+        if member is not None:
+            embed = build_pick_announcement_embed(team_info, member, last_index + 1)
+        else:
+            # Member left the server or couldn't be resolved — fall back to a plain mention.
+            embed = discord.Embed(
+                title=f"🏈 Pick {last_index + 1} — {team_info['name']}",
+                description=f"Drafted by <@{entry['user_id']}>",
+                color=int(team_info["color"], 16) if team_info.get("color") else discord.Color.gold(),
+            )
+            logo = team_info.get("logoDark") or team_info.get("logo")
+            if logo:
+                embed.set_thumbnail(url=logo)
+
+        await channel.send(embed=embed)
+
+        if draft.get("status") == "drafting" and current_pick < len(order):
+            await _announce_current_pick(channel, draft)
+            await send_ephemeral_followup(
+                interaction, f"Reposted to {channel.mention}, and re-pinged the current picker."
+            )
+        else:
+            await send_ephemeral_followup(interaction, f"Reposted to {channel.mention}.")
+
+    @app_commands.command(
         name="add_waitlist",
         description="Add a user to the draft waitlist (admin only)",
     )
