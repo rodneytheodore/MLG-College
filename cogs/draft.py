@@ -940,6 +940,31 @@ class Draft(commands.Cog):
         after a bot restart. Safe to call even when no draft is active."""
         self.bot.add_view(DraftPickButtonView())
 
+    async def cog_app_command_error(
+        self, interaction: discord.Interaction, error: app_commands.AppCommandError
+    ):
+        """Catches parameter conversion failures (e.g. a discord.Member param
+        that couldn't be resolved to an actual member) so they show a clean
+        message instead of a raw 'interaction failed' with a stack trace."""
+        original = getattr(error, "original", error)
+
+        if isinstance(original, app_commands.errors.TransformerError):
+            message = (
+                "Couldn't find that user. Please select them from Discord's suggestion "
+                "list rather than typing a name freehand — they may also need to have "
+                "sent a message in this server recently for Discord to find them."
+            )
+        else:
+            message = "Something went wrong running that command. Please try again."
+
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send(message, ephemeral=True)
+            else:
+                await interaction.response.send_message(message, ephemeral=True)
+        except discord.HTTPException:
+            pass
+
     @app_commands.command(
         name="set_draft_order",
         description="Set the team draft order (admin only)",
@@ -1101,14 +1126,18 @@ class Draft(commands.Cog):
             await send_ephemeral(interaction, "No draft order has been set yet.")
             return
 
+        # Defer immediately — channel.purge can take longer than Discord's
+        # 3-second initial-response window, especially with older messages.
+        await interaction.response.defer(ephemeral=True)
+
         posted_channel = await _post_draft_order(
             interaction.guild, [build_draft_order_embed(draft), build_eligible_teams_embed(draft)]
         )
         if posted_channel:
             await posted_channel.send(DRAFT_GUIDE_TEXT)
-            await send_ephemeral(interaction, f"Posted to {posted_channel.mention}.")
+            await send_ephemeral_followup(interaction, f"Posted to {posted_channel.mention}.")
         else:
-            await send_ephemeral(
+            await send_ephemeral_followup(
                 interaction,
                 "No `#team-draft` (or `#dynasty-team-draft`) channel found. Create one and try again.",
             )
@@ -1188,6 +1217,11 @@ class Draft(commands.Cog):
             await send_ephemeral(interaction, "The draft has already been completed.")
             return
 
+        # Defer immediately — the channel purge + multiple sends below can
+        # easily exceed Discord's 3-second initial-response window, which
+        # would otherwise cause an "Unknown interaction" error.
+        await interaction.response.defer(ephemeral=True)
+
         draft["status"] = "drafting"
         draft["current_pick"] = 0
         save_draft(draft)
@@ -1197,9 +1231,9 @@ class Draft(commands.Cog):
 
         if posted_channel:
             await _announce_current_pick(posted_channel, draft)
-            await send_ephemeral(interaction, f"✅ Draft started. Announced in {posted_channel.mention}.")
+            await send_ephemeral_followup(interaction, f"✅ Draft started. Announced in {posted_channel.mention}.")
         else:
-            await send_ephemeral(
+            await send_ephemeral_followup(
                 interaction,
                 "✅ Draft started, but no `#team-draft` channel was found to announce it. "
                 "Create the channel and run `/post_draft_order`.",
