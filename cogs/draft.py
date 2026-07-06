@@ -132,7 +132,10 @@ def build_eligible_teams_embed(draft: dict) -> discord.Embed:
 
     embed = discord.Embed(title="🏈 Eligible Teams", description=description, color=discord.Color.gold())
     participant_count = len(draft.get("order", []))
-    embed.set_footer(text=f"{len(picked_map)}/{participant_count} picked · {total_teams} eligible teams total")
+    remaining = total_teams - len(picked_map)
+    embed.set_footer(
+        text=f"{len(picked_map)}/{participant_count} picked · {remaining} of {total_teams} eligible teams remain"
+    )
     return embed
 
 
