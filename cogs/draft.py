@@ -105,6 +105,9 @@ def build_eligible_teams_embed(draft: dict) -> discord.Embed:
         if entry.get("picked_team")
     }
 
+    limits = _effective_conference_limits(draft)
+    picked_counts = _picked_counts_by_conference(draft)
+
     total_teams = 0
     section_blocks = []
 
@@ -126,7 +129,11 @@ def build_eligible_teams_embed(draft: dict) -> discord.Embed:
             else:
                 lines.append(f"⬜ {name}")
 
-        section_blocks.append(f"**{conf}**\n" + "\n".join(lines))
+        max_cap = limits.get(conf, {}).get("max")
+        is_locked = max_cap is not None and picked_counts.get(conf, 0) >= max_cap
+        header = f"**{conf}** ❌ *(locked — max reached)*" if is_locked else f"**{conf}**"
+
+        section_blocks.append(f"{header}\n" + "\n".join(lines))
 
     description = "\n\n".join(section_blocks) if section_blocks else "*(no eligible teams set)*"
 
