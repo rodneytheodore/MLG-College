@@ -470,31 +470,31 @@ async def _finalize_pick(interaction: discord.Interaction, abbr: str):
     draft = load_draft()
 
     if draft.get("status") != "drafting":
-        await interaction.edit_original_response(content="The draft isn't currently in progress.", view=None)
+        await interaction.response.edit_message(content="The draft isn't currently in progress.", view=None)
         return
 
     order = draft.get("order", [])
     current_pick = draft.get("current_pick", 0)
 
     if current_pick >= len(order):
-        await interaction.edit_original_response(content="The draft is already complete.", view=None)
+        await interaction.response.edit_message(content="The draft is already complete.", view=None)
         return
 
     expected_user_id = order[current_pick]["user_id"]
     if interaction.user.id != expected_user_id:
-        await interaction.edit_original_response(
+        await interaction.response.edit_message(
             content=f"It's not your turn. <@{expected_user_id}> is currently picking.", view=None
         )
         return
 
     teams = load_teams()
     if abbr not in teams:
-        await interaction.edit_original_response(content="That team couldn't be found. Try again.", view=None)
+        await interaction.response.edit_message(content="That team couldn't be found. Try again.", view=None)
         return
 
     eligible = _eligible_set(draft)
     if eligible is not None and abbr not in eligible:
-        await interaction.edit_original_response(
+        await interaction.response.edit_message(
             content=f"`{abbr}` isn't in the eligible teams list for this draft.", view=None
         )
         return
@@ -502,7 +502,7 @@ async def _finalize_pick(interaction: discord.Interaction, abbr: str):
     roster = load_roster()
     if abbr in roster:
         owner_id = roster[abbr]["user_id"]
-        await interaction.edit_original_response(
+        await interaction.response.edit_message(
             content=f"`{abbr}` was just claimed by <@{owner_id}>. Click **Make Your Pick** again to choose another team.",
             view=None,
         )
@@ -516,7 +516,7 @@ async def _finalize_pick(interaction: discord.Interaction, abbr: str):
     if conf_max is not None:
         current_conf_count = _picked_counts_by_conference(draft).get(picked_conference, 0)
         if current_conf_count >= conf_max:
-            await interaction.edit_original_response(
+            await interaction.response.edit_message(
                 content=f"**{picked_conference}** has already reached its max of {conf_max} team(s). "
                         f"Click **Make Your Pick** again to choose a different conference.",
                 view=None,
@@ -526,7 +526,7 @@ async def _finalize_pick(interaction: discord.Interaction, abbr: str):
     remaining_slots_after = len(order) - (current_pick + 1)
     deficit_after = _min_deficit_after_pick(draft, picked_conference)
     if deficit_after > remaining_slots_after:
-        await interaction.edit_original_response(
+        await interaction.response.edit_message(
             content=(
                 f"Picking **{teams[abbr]['name']}** would leave only {remaining_slots_after} pick(s) remaining, "
                 f"but {deficit_after} more pick(s) are still required to satisfy conference minimums. "
@@ -552,7 +552,7 @@ async def _finalize_pick(interaction: discord.Interaction, abbr: str):
     await refresh_dashboard(bot)
 
     team_name = teams[abbr]["name"]
-    await interaction.edit_original_response(content=f"✅ You picked **{team_name}**!", view=None)
+    await interaction.response.edit_message(content=f"✅ You picked **{team_name}**!", view=None)
 
     channel = discord.utils.find(
         lambda c: isinstance(c, discord.TextChannel) and c.name.lower() in DRAFT_CHANNEL_NAMES,
@@ -592,10 +592,6 @@ class TeamPickSelectView(discord.ui.View):
 
     async def _on_select(self, interaction: discord.Interaction):
         abbr = self.children[0].values[0]
-        # Defer immediately — _finalize_pick does Discord API work (roster/
-        # dashboard refreshes) that can exceed the 3-second initial-response
-        # window, which would otherwise cause an "Unknown interaction" error.
-        await interaction.response.defer()
         await _finalize_pick(interaction, abbr)
 
     async def _on_back(self, interaction: discord.Interaction):
@@ -1230,6 +1226,79 @@ class Draft(commands.Cog):
             await send_ephemeral_followup(interaction, f"Reposted to {channel.mention}.")
 
     @app_commands.command(
+        name="switch_draft_pick",
+        description="Change which team a user already drafted (admin only)",
+    )
+    @app_commands.describe(user="The user whose pick you're correcting", new_team="The team they should have instead")
+    async def switch_draft_pick(self, interaction: discord.Interaction, user: discord.Member, new_team: str):
+        if not is_admin(interaction):
+            await send_ephemeral(interaction, "Only admins can do that.")
+            return
+
+        draft = load_draft()
+        order = draft.get("order", [])
+
+        entry = next((e for e in order if e["user_id"] == user.id and e.get("picked_team")), None)
+        if entry is None:
+            await send_ephemeral(interaction, f"{user.mention} hasn't made a pick yet.")
+            return
+
+        old_abbr = entry["picked_team"]
+        teams = load_teams()
+
+        new_abbr, error = resolve_team(new_team, teams)
+        if error:
+            await send_ephemeral(interaction, error)
+            return
+
+        if new_abbr == old_abbr:
+            await send_ephemeral(interaction, f"{user.mention} already has **{teams[new_abbr]['name']}**.")
+            return
+
+        roster = load_roster()
+        if new_abbr in roster and roster[new_abbr]["user_id"] != user.id:
+            owner_id = roster[new_abbr]["user_id"]
+            await send_ephemeral(
+                interaction,
+                f"**{teams[new_abbr]['name']}** is already owned by <@{owner_id}>. "
+                f"Vacate or switch that pick first.",
+            )
+            return
+
+        # Vacate the old team, assign the new one, keep everything else on the entry intact
+        if old_abbr in roster:
+            del roster[old_abbr]
+        roster[new_abbr] = {"user_id": user.id, "username": str(user)}
+        save_roster(roster)
+
+        entry["picked_team"] = new_abbr
+        save_draft(draft)
+
+        roster_cog = self.bot.get_cog("Roster")
+        if roster_cog is not None:
+            await roster_cog.refresh_roster_channel()
+        await refresh_dashboard(self.bot)
+
+        await send_ephemeral(
+            interaction,
+            f"✅ Switched {user.mention} from **{teams[old_abbr]['name']}** to **{teams[new_abbr]['name']}**.",
+        )
+
+        await _post_draft_order(
+            interaction.guild, [build_draft_order_embed(draft), build_eligible_teams_embed(draft)]
+        )
+
+    @switch_draft_pick.autocomplete("new_team")
+    async def switch_draft_pick_autocomplete(self, interaction: discord.Interaction, current: str):
+        teams = load_teams()
+        current_lower = current.lower()
+        matches = [
+            t for abbr, t in teams.items()
+            if current_lower in t["name"].lower() or current_lower in abbr.lower()
+        ]
+        return [app_commands.Choice(name=t["name"], value=t["abbr"]) for t in matches[:25]]
+
+    @app_commands.command(
         name="add_waitlist",
         description="Add a user to the draft waitlist (admin only)",
     )
@@ -1329,6 +1398,3 @@ class Draft(commands.Cog):
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Draft(bot))
-
-
-
