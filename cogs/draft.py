@@ -467,34 +467,41 @@ async def _finalize_pick(interaction: discord.Interaction, abbr: str):
     """Reloads draft state fresh, re-validates, and completes the pick.
     Called from the team select — this is the single source of truth for
     committing a pick, whichever path got here."""
+    # Defer immediately — refresh_roster_channel() (which purges/rebuilds the
+    # whole roster channel) and refresh_dashboard() below can easily exceed
+    # Discord's 3-second initial-response window, which would otherwise cause
+    # an "Unknown interaction" error. edit_original_response works for up to
+    # 15 minutes after deferring, regardless of how long the work below takes.
+    await interaction.response.defer()
+
     draft = load_draft()
 
     if draft.get("status") != "drafting":
-        await interaction.response.edit_message(content="The draft isn't currently in progress.", view=None)
+        await interaction.edit_original_response(content="The draft isn't currently in progress.", view=None)
         return
 
     order = draft.get("order", [])
     current_pick = draft.get("current_pick", 0)
 
     if current_pick >= len(order):
-        await interaction.response.edit_message(content="The draft is already complete.", view=None)
+        await interaction.edit_original_response(content="The draft is already complete.", view=None)
         return
 
     expected_user_id = order[current_pick]["user_id"]
     if interaction.user.id != expected_user_id:
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             content=f"It's not your turn. <@{expected_user_id}> is currently picking.", view=None
         )
         return
 
     teams = load_teams()
     if abbr not in teams:
-        await interaction.response.edit_message(content="That team couldn't be found. Try again.", view=None)
+        await interaction.edit_original_response(content="That team couldn't be found. Try again.", view=None)
         return
 
     eligible = _eligible_set(draft)
     if eligible is not None and abbr not in eligible:
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             content=f"`{abbr}` isn't in the eligible teams list for this draft.", view=None
         )
         return
@@ -502,7 +509,7 @@ async def _finalize_pick(interaction: discord.Interaction, abbr: str):
     roster = load_roster()
     if abbr in roster:
         owner_id = roster[abbr]["user_id"]
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             content=f"`{abbr}` was just claimed by <@{owner_id}>. Click **Make Your Pick** again to choose another team.",
             view=None,
         )
@@ -516,7 +523,7 @@ async def _finalize_pick(interaction: discord.Interaction, abbr: str):
     if conf_max is not None:
         current_conf_count = _picked_counts_by_conference(draft).get(picked_conference, 0)
         if current_conf_count >= conf_max:
-            await interaction.response.edit_message(
+            await interaction.edit_original_response(
                 content=f"**{picked_conference}** has already reached its max of {conf_max} team(s). "
                         f"Click **Make Your Pick** again to choose a different conference.",
                 view=None,
@@ -526,7 +533,7 @@ async def _finalize_pick(interaction: discord.Interaction, abbr: str):
     remaining_slots_after = len(order) - (current_pick + 1)
     deficit_after = _min_deficit_after_pick(draft, picked_conference)
     if deficit_after > remaining_slots_after:
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             content=(
                 f"Picking **{teams[abbr]['name']}** would leave only {remaining_slots_after} pick(s) remaining, "
                 f"but {deficit_after} more pick(s) are still required to satisfy conference minimums. "
@@ -552,7 +559,7 @@ async def _finalize_pick(interaction: discord.Interaction, abbr: str):
     await refresh_dashboard(bot)
 
     team_name = teams[abbr]["name"]
-    await interaction.response.edit_message(content=f"✅ You picked **{team_name}**!", view=None)
+    await interaction.edit_original_response(content=f"✅ You picked **{team_name}**!", view=None)
 
     channel = discord.utils.find(
         lambda c: isinstance(c, discord.TextChannel) and c.name.lower() in DRAFT_CHANNEL_NAMES,
@@ -1265,6 +1272,11 @@ class Draft(commands.Cog):
             )
             return
 
+        # Defer immediately — refresh_roster_channel() (which purges/rebuilds
+        # the whole roster channel) and refresh_dashboard() below can easily
+        # exceed Discord's 3-second initial-response window.
+        await interaction.response.defer(ephemeral=True)
+
         # Vacate the old team, assign the new one, keep everything else on the entry intact
         if old_abbr in roster:
             del roster[old_abbr]
@@ -1279,7 +1291,7 @@ class Draft(commands.Cog):
             await roster_cog.refresh_roster_channel()
         await refresh_dashboard(self.bot)
 
-        await send_ephemeral(
+        await send_ephemeral_followup(
             interaction,
             f"✅ Switched {user.mention} from **{teams[old_abbr]['name']}** to **{teams[new_abbr]['name']}**.",
         )
