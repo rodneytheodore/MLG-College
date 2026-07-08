@@ -14,7 +14,7 @@ DATA_DIR = os.environ.get("DATA_DIR", "data").strip()
 # ---- Constants (also imported by scheme_cards) ----
 
 CORE_RUN_CONCEPTS = [(c, c) for c in [
-    "Inside Zone", "Outside Zone/Wide Zone", "Split Zone", "Zone Read",
+    "Inside Zone/Split Zone", "Outside Zone/Wide Zone", "Zone Read",
     "Duo", "Iso (Lead)", "Power", "Counter", "Trap",
     "Sweep", "Toss",
     "Power Read", "Speed Option", "Triple Option",
