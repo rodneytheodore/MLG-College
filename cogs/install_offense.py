@@ -82,24 +82,35 @@ def save_offense_installs(data: dict):
 
 class MultiSelectStepView(discord.ui.View):
     def __init__(self, options: list[tuple[str, str]], max_select: int, label: str,
-                 on_confirm, min_select: int = 1):
+                 on_confirm, min_select: int = 1, on_back=None, preselected: list[str] | None = None):
         super().__init__(timeout=120)
         self.values_order = [value for _, value in options]
         self.on_confirm = on_confirm
         self.min_select = min_select
-        self.selected: list[str] = []
+        self.selected: list[str] = list(preselected) if preselected else []
 
+        preselected_set = set(preselected or [])
         self.select = discord.ui.Select(
             placeholder=f"Select {min_select}-{max_select} {label.lower()}...",
             min_values=min_select,
             max_values=min(max_select, len(options)),
             options=[
-                discord.SelectOption(label=lbl[:100], value=val[:100])
+                discord.SelectOption(label=lbl[:100], value=val[:100], default=val in preselected_set)
                 for lbl, val in options
             ],
         )
         self.select.callback = self._on_select
         self.add_item(self.select)
+
+        if self.selected:
+            ordered = sorted(self.selected, key=self.values_order.index)
+            preview = ", ".join(ordered)
+            self.select.placeholder = preview[:92] + "..." if len(preview) > 95 else preview
+
+        if on_back is not None:
+            back_btn = discord.ui.Button(label="← Back", style=discord.ButtonStyle.secondary)
+            back_btn.callback = on_back
+            self.add_item(back_btn)
 
         confirm_btn = discord.ui.Button(label="Confirm Selection", style=discord.ButtonStyle.success)
         confirm_btn.callback = self._on_confirm_click
@@ -237,56 +248,62 @@ class InstallOffenseModal3(discord.ui.Modal, title="Base Formations (3 of 3)"):
             return
 
         abbr = self.abbr
-        data: dict = {"formations": all_formations}
+        wizard = OffenseConceptsWizard(abbr, all_formations)
+        await wizard.start(interaction)
 
-        async def after_deep(interaction: discord.Interaction, selected: list[str]):
-            data["deep_pass"] = selected
-            await _save_and_show(interaction, abbr, data)
 
-        async def after_intermediate(interaction: discord.Interaction, selected: list[str]):
-            data["intermediate_pass"] = selected
-            view = MultiSelectStepView(
-                PASS_DEEP, PASS_DEEP_MAX, "deep pass concepts", after_deep,
-                min_select=PASS_DEEP_MIN,
-            )
-            await interaction.response.edit_message(
-                content=f"**Offensive Install — Deep Pass concepts** "
-                        f"(pick {PASS_DEEP_MIN}–{PASS_DEEP_MAX}, then confirm):",
-                view=view,
-            )
+CONCEPT_STEPS = [
+    ("run_concepts", CORE_RUN_CONCEPTS, CORE_RUN_MAX_SELECT, 1, "run concepts"),
+    ("quick_pass", PASS_QUICK_GAME, PASS_QUICK_MAX, PASS_QUICK_MIN, "quick pass concepts"),
+    ("intermediate_pass", PASS_INTERMEDIATE, PASS_INTERMEDIATE_MAX, PASS_INTERMEDIATE_MIN, "intermediate pass concepts"),
+    ("deep_pass", PASS_DEEP, PASS_DEEP_MAX, PASS_DEEP_MIN, "deep pass concepts"),
+]
 
-        async def after_quick(interaction: discord.Interaction, selected: list[str]):
-            data["quick_pass"] = selected
-            view = MultiSelectStepView(
-                PASS_INTERMEDIATE, PASS_INTERMEDIATE_MAX, "intermediate pass concepts",
-                after_intermediate, min_select=PASS_INTERMEDIATE_MIN,
-            )
-            await interaction.response.edit_message(
-                content=f"**Offensive Install — Intermediate Pass concepts** "
-                        f"(pick {PASS_INTERMEDIATE_MIN}–{PASS_INTERMEDIATE_MAX}, then confirm):",
-                view=view,
-            )
 
-        async def after_run(interaction: discord.Interaction, selected: list[str]):
-            data["run_concepts"] = selected
-            view = MultiSelectStepView(
-                PASS_QUICK_GAME, PASS_QUICK_MAX, "quick game pass concepts",
-                after_quick, min_select=PASS_QUICK_MIN,
-            )
-            await interaction.response.edit_message(
-                content=f"**Offensive Install — Quick Pass concepts** "
-                        f"(pick {PASS_QUICK_MIN}–{PASS_QUICK_MAX}, then confirm):",
-                view=view,
-            )
+class OffenseConceptsWizard:
+    """Run Concepts → Quick Pass → Intermediate Pass → Deep Pass, with Back
+    support at every step after the first. Going back re-shows that step
+    with its previous selection pre-checked."""
 
+    def __init__(self, abbr: str, formations: list[str]):
+        self.abbr = abbr
+        self.formations = formations
+        self.data: dict = {}
+        self.index = 0
+
+    async def start(self, interaction: discord.Interaction):
+        await self._show_step(interaction, first=True)
+
+    async def _show_step(self, interaction: discord.Interaction, first: bool = False):
+        key, options, max_select, min_select, label = CONCEPT_STEPS[self.index]
         view = MultiSelectStepView(
-            CORE_RUN_CONCEPTS, CORE_RUN_MAX_SELECT, "core run concepts", after_run,
+            options, max_select, label, self._on_forward, min_select=min_select,
+            on_back=self._on_back if self.index > 0 else None,
+            preselected=self.data.get(key),
         )
-        await interaction.response.send_message(
-            f"**Offensive Install — Run Concepts** (up to {CORE_RUN_MAX_SELECT}, then confirm):",
-            view=view,
-            ephemeral=True,
+        step_num = self.index + 1
+        content = (
+            f"**Offensive Install — {label.title()}** "
+            f"(step {step_num}/{len(CONCEPT_STEPS)}, pick {min_select}-{max_select}, then confirm):"
         )
+        if first:
+            await interaction.response.send_message(content, view=view, ephemeral=True)
+        else:
+            await interaction.response.edit_message(content=content, view=view)
+
+    async def _on_forward(self, interaction: discord.Interaction, selected: list[str]):
+        key = CONCEPT_STEPS[self.index][0]
+        self.data[key] = selected
+        self.index += 1
+        if self.index >= len(CONCEPT_STEPS):
+            full_data = {"formations": self.formations, **self.data}
+            await _save_and_show(interaction, self.abbr, full_data)
+        else:
+            await self._show_step(interaction)
+
+    async def _on_back(self, interaction: discord.Interaction):
+        self.index -= 1
+        await self._show_step(interaction)
 
 
 async def _save_and_show(interaction: discord.Interaction, abbr: str, data: dict):

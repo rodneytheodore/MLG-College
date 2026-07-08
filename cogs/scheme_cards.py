@@ -268,7 +268,8 @@ def build_step_prompt(step_names: list[str], index: int, label: str) -> str:
 class ChoiceStepView(discord.ui.View):
     """A select menu where picking one option advances the wizard."""
 
-    def __init__(self, choices: list[tuple[str, str]], placeholder: str, on_pick):
+    def __init__(self, choices: list[tuple[str, str]], placeholder: str, on_pick,
+                 on_back=None, selected_value: str | None = None):
         super().__init__(timeout=180)
         self.on_pick = on_pick
 
@@ -277,12 +278,17 @@ class ChoiceStepView(discord.ui.View):
             min_values=1,
             max_values=1,
             options=[
-                discord.SelectOption(label=label[:100], value=value[:100])
+                discord.SelectOption(label=label[:100], value=value[:100], default=value == selected_value)
                 for label, value in choices
             ],
         )
         select.callback = self._make_callback(select)
         self.add_item(select)
+
+        if on_back is not None:
+            back_btn = discord.ui.Button(label="← Back", style=discord.ButtonStyle.secondary)
+            back_btn.callback = on_back
+            self.add_item(back_btn)
 
     def _make_callback(self, select: discord.ui.Select):
         async def callback(interaction: discord.Interaction):
@@ -297,24 +303,36 @@ class MultiSelectStepView(discord.ui.View):
     sorted list of selected values — used for both Personnel Groupings and
     Core Run Concepts, chained one after another."""
 
-    def __init__(self, options: list[tuple[str, str]], max_select: int, label: str, on_confirm, min_select: int = 1):
+    def __init__(self, options: list[tuple[str, str]], max_select: int, label: str, on_confirm,
+                 min_select: int = 1, on_back=None, preselected: list[str] | None = None):
         super().__init__(timeout=120)
         self.values_order = [value for _, value in options]
         self.on_confirm = on_confirm
         self.min_select = min_select
-        self.selected: list[str] = []
+        self.selected: list[str] = list(preselected) if preselected else []
 
+        preselected_set = set(preselected or [])
         self.select = discord.ui.Select(
             placeholder=f"Select {min_select}-{max_select} {label.lower()}...",
             min_values=min_select,
             max_values=min(max_select, len(options)),
             options=[
-                discord.SelectOption(label=lbl[:100], value=val[:100])
+                discord.SelectOption(label=lbl[:100], value=val[:100], default=val in preselected_set)
                 for lbl, val in options
             ],
         )
         self.select.callback = self._on_select
         self.add_item(self.select)
+
+        if self.selected:
+            ordered = sorted(self.selected, key=self.values_order.index)
+            preview = ", ".join(ordered)
+            self.select.placeholder = preview[:92] + "..." if len(preview) > 95 else preview
+
+        if on_back is not None:
+            back_btn = discord.ui.Button(label="← Back", style=discord.ButtonStyle.secondary)
+            back_btn.callback = on_back
+            self.add_item(back_btn)
 
         confirm_btn = discord.ui.Button(label="Confirm Selection", style=discord.ButtonStyle.success)
         confirm_btn.callback = self._on_confirm_click
@@ -353,33 +371,45 @@ class OffenseWizard:
         self.abbr = abbr
         self.data = base_data
         self.step_index = 0
+        self.personnel_selected: list[str] | None = None
 
     async def start(self, interaction: discord.Interaction):
-        field_key, choices = self.STEPS[0]
-        prompt = build_step_prompt(OFFENSE_STEP_NAMES, 0, OFFENSE_STEP_NAMES[0])
-        view = ChoiceStepView(choices, f"Select your {OFFENSE_STEP_NAMES[0].lower()}...", self._make_advance_callback())
-        await interaction.response.send_message(prompt, view=view, ephemeral=True)
+        await self._show_step(interaction, first=True)
 
-    def _make_advance_callback(self):
-        async def on_pick(interaction: discord.Interaction, value: str):
-            field_key = self.STEPS[self.step_index][0]
-            self.data[field_key] = value
-            self.step_index += 1
+    async def _show_step(self, interaction: discord.Interaction, first: bool = False):
+        field_key, choices = self.STEPS[self.step_index]
+        step_name = OFFENSE_STEP_NAMES[self.step_index]
+        prompt = build_step_prompt(OFFENSE_STEP_NAMES, self.step_index, step_name)
+        view = ChoiceStepView(
+            choices, f"Select your {step_name.lower()}...", self._on_pick,
+            on_back=self._on_back if self.step_index > 0 else None,
+            selected_value=self.data.get(field_key),
+        )
+        if first:
+            await interaction.response.send_message(prompt, view=view, ephemeral=True)
+        else:
+            await interaction.response.edit_message(content=prompt, view=view)
 
-            if self.step_index < len(self.STEPS):
-                _, choices = self.STEPS[self.step_index]
-                step_name = OFFENSE_STEP_NAMES[self.step_index]
-                prompt = build_step_prompt(OFFENSE_STEP_NAMES, self.step_index, step_name)
-                view = ChoiceStepView(choices, f"Select your {step_name.lower()}...", self._make_advance_callback())
-                await interaction.response.edit_message(content=prompt, view=view)
-            else:
-                await self._show_personnel_step(interaction)
-        return on_pick
+    async def _on_pick(self, interaction: discord.Interaction, value: str):
+        field_key = self.STEPS[self.step_index][0]
+        self.data[field_key] = value
+        self.step_index += 1
+
+        if self.step_index < len(self.STEPS):
+            await self._show_step(interaction)
+        else:
+            await self._show_personnel_step(interaction)
+
+    async def _on_back(self, interaction: discord.Interaction):
+        self.step_index -= 1
+        await self._show_step(interaction)
 
     async def _show_personnel_step(self, interaction: discord.Interaction):
         view = MultiSelectStepView(
             PERSONNEL_GROUPINGS, PERSONNEL_MAX_SELECT, "personnel groupings",
             self._after_personnel,
+            on_back=self._on_back_from_personnel,
+            preselected=self.personnel_selected,
         )
         await interaction.response.edit_message(
             content=f"**(Part 2 of 2) Step 5/9 — Select your primary personnel groupings** "
@@ -387,7 +417,12 @@ class OffenseWizard:
             view=view,
         )
 
+    async def _on_back_from_personnel(self, interaction: discord.Interaction):
+        self.step_index = len(self.STEPS) - 1
+        await self._show_step(interaction)
+
     async def _after_personnel(self, interaction: discord.Interaction, selected: list[str]):
+        self.personnel_selected = selected
         self.data["personnel"] = ", ".join(selected)
 
         cards = load_scheme_cards()
@@ -420,26 +455,35 @@ class DefenseWizard:
         self.step_index = 0
 
     async def start(self, interaction: discord.Interaction):
-        field_key, choices = self.STEPS[0]
-        prompt = build_step_prompt(DEFENSE_STEP_NAMES, 0, DEFENSE_STEP_NAMES[0])
-        view = ChoiceStepView(choices, f"Select your {DEFENSE_STEP_NAMES[0].lower()}...", self._make_advance_callback())
-        await interaction.response.send_message(prompt, view=view, ephemeral=True)
+        await self._show_step(interaction, first=True)
 
-    def _make_advance_callback(self):
-        async def on_pick(interaction: discord.Interaction, value: str):
-            field_key = self.STEPS[self.step_index][0]
-            self.data[field_key] = value
-            self.step_index += 1
+    async def _show_step(self, interaction: discord.Interaction, first: bool = False):
+        field_key, choices = self.STEPS[self.step_index]
+        step_name = DEFENSE_STEP_NAMES[self.step_index]
+        prompt = build_step_prompt(DEFENSE_STEP_NAMES, self.step_index, step_name)
+        view = ChoiceStepView(
+            choices, f"Select your {step_name.lower()}...", self._on_pick,
+            on_back=self._on_back if self.step_index > 0 else None,
+            selected_value=self.data.get(field_key),
+        )
+        if first:
+            await interaction.response.send_message(prompt, view=view, ephemeral=True)
+        else:
+            await interaction.response.edit_message(content=prompt, view=view)
 
-            if self.step_index < len(self.STEPS):
-                _, choices = self.STEPS[self.step_index]
-                step_name = DEFENSE_STEP_NAMES[self.step_index]
-                prompt = build_step_prompt(DEFENSE_STEP_NAMES, self.step_index, step_name)
-                view = ChoiceStepView(choices, f"Select your {step_name.lower()}...", self._make_advance_callback())
-                await interaction.response.edit_message(content=prompt, view=view)
-            else:
-                await self._save(interaction)
-        return on_pick
+    async def _on_pick(self, interaction: discord.Interaction, value: str):
+        field_key = self.STEPS[self.step_index][0]
+        self.data[field_key] = value
+        self.step_index += 1
+
+        if self.step_index < len(self.STEPS):
+            await self._show_step(interaction)
+        else:
+            await self._save(interaction)
+
+    async def _on_back(self, interaction: discord.Interaction):
+        self.step_index -= 1
+        await self._show_step(interaction)
 
     async def _save(self, interaction: discord.Interaction):
         cards = load_scheme_cards()

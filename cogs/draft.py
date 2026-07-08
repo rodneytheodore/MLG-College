@@ -310,9 +310,23 @@ class PickUserView(discord.ui.View):
         select.callback = self._on_select
         self.add_item(select)
 
+        if self.wizard.picks:
+            back_btn = discord.ui.Button(label="← Back", style=discord.ButtonStyle.secondary)
+            back_btn.callback = self._on_back
+            self.add_item(back_btn)
+
         cancel_btn = discord.ui.Button(label="Cancel", style=discord.ButtonStyle.secondary)
         cancel_btn.callback = self._on_cancel
         self.add_item(cancel_btn)
+
+    async def _on_back(self, interaction: discord.Interaction):
+        self.wizard.picks.pop()
+        pick_number = len(self.wizard.picks) + 1
+        view = PickUserView(self.wizard)
+        await interaction.response.edit_message(
+            content=f"**Pick {pick_number} of {self.wizard.team_count}** — who's up for this pick?",
+            view=view,
+        )
 
     async def _on_select(self, interaction: discord.Interaction):
         # discord.py resolves UserSelect values directly on the component.
@@ -729,12 +743,13 @@ def _finish_eligible_teams(
 class EligibleTeamsWizard:
     """First sets a single global min/max eligible-team range, then walks
     through admin-chosen conferences one at a time, multi-selecting teams
-    within that range (clamped per conference to however many teams it has)."""
+    within that range (clamped per conference to however many teams it has).
+    Supports Back at every step, restoring prior selections."""
 
     def __init__(self, conferences: list[str]):
         self.conferences = conferences
         self.index = 0
-        self.selected_abbrs: list[str] = []
+        self.per_conf_selections: dict[str, list[str]] = {}
         self.global_min = 0
         self.global_max = 0
         self.by_conf = load_teams_by_conference()
@@ -748,18 +763,33 @@ class EligibleTeamsWizard:
     def max_possible_across_selected(self) -> int:
         return max((self.team_count_for(c) for c in self.conferences), default=0)
 
+    def flat_selected_abbrs(self) -> list[str]:
+        result: list[str] = []
+        for conf in self.conferences:
+            result.extend(self.per_conf_selections.get(conf, []))
+        return result
+
     async def start(self, interaction: discord.Interaction):
+        """Called from the conference-select's own callback (a component
+        interaction), so this edits that same message rather than sending
+        a new one."""
         view = GlobalMinMaxView(self)
-        await interaction.response.send_message(
-            "**Set a global min/max eligible teams per conference:**", view=view, ephemeral=True
+        await interaction.response.edit_message(
+            content="**Set a global min/max eligible teams per conference:**", view=view
+        )
+
+    async def show_global_min_max(self, interaction: discord.Interaction):
+        view = GlobalMinMaxView(self, initial_min=self.global_min, initial_max=self.global_max)
+        await interaction.response.edit_message(
+            content="**Set a global min/max eligible teams per conference:**", view=view
         )
 
     async def start_conference_selection(self, interaction: discord.Interaction, min_v: int, max_v: int):
         self.global_min = min_v
         self.global_max = max_v
-        await self._show_team_select(interaction, first=True)
+        await self._show_team_select(interaction)
 
-    async def _show_team_select(self, interaction: discord.Interaction, first: bool = False):
+    async def _show_team_select(self, interaction: discord.Interaction):
         conference = self.current_conference()
         teams = self.by_conf.get(conference, [])
 
@@ -768,7 +798,10 @@ class EligibleTeamsWizard:
             await self.after_conference_selection(interaction, [])
             return
 
-        view = ConferenceTeamMultiSelectView(self, conference, teams, self.global_min, self.global_max)
+        view = ConferenceTeamMultiSelectView(
+            self, conference, teams, self.global_min, self.global_max,
+            preselected=self.per_conf_selections.get(conference),
+        )
         content = (
             f"**{conference}** ({self.index + 1}/{len(self.conferences)}) — select eligible teams. "
             f"*(The draft will still cap this conference at {self.global_min}-{self.global_max} pick(s) — "
@@ -776,20 +809,28 @@ class EligibleTeamsWizard:
         )
         await interaction.response.edit_message(content=content, view=view)
 
-    async def after_conference_selection(
-        self, interaction: discord.Interaction, selected: list[str], first: bool = False
-    ):
+    async def after_conference_selection(self, interaction: discord.Interaction, selected: list[str]):
         """Called once a conference's teams have been chosen (or skipped)."""
-        self.selected_abbrs.extend(selected)
+        conference = self.current_conference()
+        self.per_conf_selections[conference] = selected
         self.index += 1
         if self.index >= len(self.conferences):
             await self._finish(interaction)
             return
         await self._show_team_select(interaction)
 
+    async def go_back_from_team_select(self, interaction: discord.Interaction):
+        if self.index == 0:
+            await self.show_global_min_max(interaction)
+        else:
+            self.index -= 1
+            await self._show_team_select(interaction)
+
     async def _finish(self, interaction: discord.Interaction):
         draft = load_draft()
-        embed, warning = _finish_eligible_teams(draft, self.selected_abbrs, self.global_min, self.global_max)
+        embed, warning = _finish_eligible_teams(
+            draft, self.flat_selected_abbrs(), self.global_min, self.global_max
+        )
         await interaction.response.edit_message(content=warning or None, embed=embed, view=None)
 
 
@@ -797,29 +838,40 @@ class GlobalMinMaxView(discord.ui.View):
     """Step 2 — pick ONE min/max eligible team range that applies uniformly
     to every conference chosen in step 1."""
 
-    def __init__(self, wizard: EligibleTeamsWizard):
+    def __init__(self, wizard: EligibleTeamsWizard, initial_min: int | None = None, initial_max: int | None = None):
         super().__init__(timeout=180)
         self.wizard = wizard
 
         max_possible = wizard.max_possible_across_selected()
-        self.min_value = 0
-        self.max_value = max_possible
+        self.min_value = initial_min if initial_min is not None else 0
+        self.max_value = initial_max if initial_max is not None else max_possible
 
-        count_options = [discord.SelectOption(label=str(i), value=str(i)) for i in range(max_possible + 1)]
+        min_options = [
+            discord.SelectOption(label=str(i), value=str(i), default=(i == self.min_value))
+            for i in range(max_possible + 1)
+        ]
+        max_options = [
+            discord.SelectOption(label=str(i), value=str(i), default=(i == self.max_value))
+            for i in range(max_possible + 1)
+        ]
 
         self.min_select = discord.ui.Select(
-            placeholder="Minimum teams per conference (default 0)",
-            min_values=1, max_values=1, options=count_options, row=0,
+            placeholder=f"Minimum teams per conference (currently {self.min_value})",
+            min_values=1, max_values=1, options=min_options, row=0,
         )
         self.min_select.callback = self._on_min
         self.add_item(self.min_select)
 
         self.max_select = discord.ui.Select(
-            placeholder=f"Maximum teams per conference (default {max_possible})",
-            min_values=1, max_values=1, options=count_options, row=1,
+            placeholder=f"Maximum teams per conference (currently {self.max_value})",
+            min_values=1, max_values=1, options=max_options, row=1,
         )
         self.max_select.callback = self._on_max
         self.add_item(self.max_select)
+
+        back_btn = discord.ui.Button(label="← Back", style=discord.ButtonStyle.secondary, row=2)
+        back_btn.callback = self._on_back
+        self.add_item(back_btn)
 
         confirm_btn = discord.ui.Button(label="Continue →", style=discord.ButtonStyle.primary, row=2)
         confirm_btn.callback = self._on_confirm
@@ -832,6 +884,12 @@ class GlobalMinMaxView(discord.ui.View):
     async def _on_max(self, interaction: discord.Interaction):
         self.max_value = int(self.max_select.values[0])
         await interaction.response.defer()
+
+    async def _on_back(self, interaction: discord.Interaction):
+        view = EligibleConferenceSelectView(preselected=self.wizard.conferences)
+        await interaction.response.edit_message(
+            content="**Select conferences to pull eligible teams from:**", view=view
+        )
 
     async def _on_confirm(self, interaction: discord.Interaction):
         if self.min_value > self.max_value:
@@ -849,11 +907,16 @@ class ConferenceTeamMultiSelectView(discord.ui.View):
     conference go into the eligible pool. Unconstrained by the draft-time
     min/max — the pool can be larger than what's actually draftable."""
 
-    def __init__(self, wizard: EligibleTeamsWizard, conference: str, teams: list[dict], draft_min: int, draft_max: int):
+    def __init__(self, wizard: EligibleTeamsWizard, conference: str, teams: list[dict], draft_min: int, draft_max: int,
+                 preselected: list[str] | None = None):
         super().__init__(timeout=180)
         self.wizard = wizard
 
-        options = [discord.SelectOption(label=t["name"][:100], value=t["abbr"][:100]) for t in teams[:25]]
+        preselected_set = set(preselected or [])
+        options = [
+            discord.SelectOption(label=t["name"][:100], value=t["abbr"][:100], default=t["abbr"] in preselected_set)
+            for t in teams[:25]
+        ]
         select = discord.ui.Select(
             placeholder=f"Select eligible teams in {conference}...",
             min_values=0,
@@ -863,12 +926,19 @@ class ConferenceTeamMultiSelectView(discord.ui.View):
         select.callback = self._on_select
         self.add_item(select)
 
+        back_btn = discord.ui.Button(label="← Back", style=discord.ButtonStyle.secondary)
+        back_btn.callback = self._on_back
+        self.add_item(back_btn)
+
         skip_btn = discord.ui.Button(label="Skip this conference", style=discord.ButtonStyle.secondary)
         skip_btn.callback = self._on_skip
         self.add_item(skip_btn)
 
     async def _on_select(self, interaction: discord.Interaction):
         await self.wizard.after_conference_selection(interaction, self.children[0].values)
+
+    async def _on_back(self, interaction: discord.Interaction):
+        await self.wizard.go_back_from_team_select(interaction)
 
     async def _on_skip(self, interaction: discord.Interaction):
         await self.wizard.after_conference_selection(interaction, [])
@@ -877,12 +947,16 @@ class ConferenceTeamMultiSelectView(discord.ui.View):
 class EligibleConferenceSelectView(discord.ui.View):
     """Step 1 — multi-select which conferences to pull eligible teams from."""
 
-    def __init__(self):
+    def __init__(self, preselected: list[str] | None = None):
         super().__init__(timeout=180)
         by_conf = load_teams_by_conference()
         conference_names = list(by_conf.keys())
+        preselected_set = set(preselected or [])
 
-        options = [discord.SelectOption(label=c[:100], value=c[:100]) for c in conference_names[:25]]
+        options = [
+            discord.SelectOption(label=c[:100], value=c[:100], default=c in preselected_set)
+            for c in conference_names[:25]
+        ]
         select = discord.ui.Select(
             placeholder="Select one or more conferences...",
             min_values=1,

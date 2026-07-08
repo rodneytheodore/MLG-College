@@ -53,23 +53,35 @@ def save_defense_installs(data: dict):
 class DefenseMultiSelectView(discord.ui.View):
     """Reusable multi-select step with a Confirm button."""
 
-    def __init__(self, options: list[tuple[str, str]], max_values: int, placeholder: str, on_confirm):
+    def __init__(self, options: list[tuple[str, str]], max_values: int, placeholder: str, on_confirm,
+                 on_back=None, preselected: list[str] | None = None):
         super().__init__(timeout=180)
         self._on_confirm = on_confirm
-        self.selected: list[str] = []
+        self.selected: list[str] = list(preselected) if preselected else []
         self.values_order = [value for _, value in options]
 
+        preselected_set = set(preselected or [])
         select = discord.ui.Select(
             placeholder=placeholder,
             min_values=1,
             max_values=max_values,
             options=[
-                discord.SelectOption(label=label[:100], value=value[:100])
+                discord.SelectOption(label=label[:100], value=value[:100], default=value in preselected_set)
                 for label, value in options
             ],
         )
         select.callback = self._on_select(select)
         self.add_item(select)
+
+        if self.selected:
+            ordered = sorted(self.selected, key=self.values_order.index)
+            preview = ", ".join(ordered)
+            select.placeholder = preview[:92] + "..." if len(preview) > 95 else preview
+
+        if on_back is not None:
+            back_btn = discord.ui.Button(label="← Back", style=discord.ButtonStyle.secondary)
+            back_btn.callback = on_back
+            self.add_item(back_btn)
 
         btn = discord.ui.Button(label="Confirm →", style=discord.ButtonStyle.primary)
         btn.callback = self._on_confirm_click
@@ -267,38 +279,60 @@ class InstallDefenseModal3(discord.ui.Modal, title="Sub Packages (2 of 2)"):
             )
             return
 
-        abbr = self.abbr
+        wizard = DefenseCoveragePressureWizard(self.abbr, all_formations, all_subs)
+        await wizard.start(interaction)
 
-        async def on_pressures(interaction: discord.Interaction, pressures: list[str]):
-            view = DefenseInstallConfirmView(abbr, all_formations, all_subs, coverages_holder[0], pressures)
-            await interaction.response.edit_message(
-                content="**Defensive Install — confirm?**",
-                view=view,
-            )
 
-        coverages_holder: list[list[str]] = [[]]
+class DefenseCoveragePressureWizard:
+    """Base Coverages → Pressure Packages, with Back support on the second step."""
 
-        async def on_coverages(interaction: discord.Interaction, coverages: list[str]):
-            coverages_holder[0] = coverages
-            pressure_view = DefenseMultiSelectView(
-                PRESSURE_TYPES, PRESSURE_TYPES_MAX_SELECT,
-                f"Select pressure packages (up to {PRESSURE_TYPES_MAX_SELECT})",
-                on_pressures,
-            )
-            await interaction.response.edit_message(
-                content="**Defensive Install (4 of 4)** — Select your pressure packages:",
-                view=pressure_view,
-            )
+    def __init__(self, abbr: str, formations: list[str], sub_packages: list[str]):
+        self.abbr = abbr
+        self.formations = formations
+        self.sub_packages = sub_packages
+        self.coverages: list[str] = []
+        self.pressures: list[str] = []
+        self.index = 0
 
-        coverage_view = DefenseMultiSelectView(
+    async def start(self, interaction: discord.Interaction):
+        await self._show_coverages(interaction, first=True)
+
+    async def _show_coverages(self, interaction: discord.Interaction, first: bool = False):
+        view = DefenseMultiSelectView(
             BASE_COVERAGES, BASE_COVERAGES_MAX_SELECT,
             f"Select base coverages (up to {BASE_COVERAGES_MAX_SELECT})",
-            on_coverages,
+            self._on_coverages,
+            preselected=self.coverages or None,
         )
-        await interaction.response.send_message(
-            "**Defensive Install (3 of 4)** — Select your base coverages:",
-            view=coverage_view,
-            ephemeral=True,
+        content = "**Defensive Install (3 of 4)** — Select your base coverages:"
+        if first:
+            await interaction.response.send_message(content, view=view, ephemeral=True)
+        else:
+            await interaction.response.edit_message(content=content, view=view)
+
+    async def _on_coverages(self, interaction: discord.Interaction, coverages: list[str]):
+        self.coverages = coverages
+        view = DefenseMultiSelectView(
+            PRESSURE_TYPES, PRESSURE_TYPES_MAX_SELECT,
+            f"Select pressure packages (up to {PRESSURE_TYPES_MAX_SELECT})",
+            self._on_pressures,
+            on_back=self._on_back,
+            preselected=self.pressures or None,
+        )
+        await interaction.response.edit_message(
+            content="**Defensive Install (4 of 4)** — Select your pressure packages:",
+            view=view,
+        )
+
+    async def _on_back(self, interaction: discord.Interaction):
+        await self._show_coverages(interaction)
+
+    async def _on_pressures(self, interaction: discord.Interaction, pressures: list[str]):
+        self.pressures = pressures
+        view = DefenseInstallConfirmView(self.abbr, self.formations, self.sub_packages, self.coverages, pressures)
+        await interaction.response.edit_message(
+            content="**Defensive Install — confirm?**",
+            view=view,
         )
 
 
