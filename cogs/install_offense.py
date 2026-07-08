@@ -40,10 +40,11 @@ PASS_INTERMEDIATE = [
     ("Levels - Stacked in-breaking routes at different depths", "Levels"),
     ("Mesh - Two receivers cross shallow to rub off man coverage", "Mesh"),
     ("Salem/Pivot - Shallow option paired with a deeper in route", "Salem/Pivot"),
-    ("Shallow Cross - Flat shallow crosser underneath the defense", "Shallow Cross"),
+    ("Shallow Cross - Flat shallow crosser paired with a dig route breaking the opposite direction", "Shallow Cross"),
     ("Smash - Corner and hitch high-low read vs Cover 2", "Smash"),
     ("Spot - Corner, spot, flat triangle read vs zone", "Spot"),
     ("Texas - Deep post plus RB angle route for a high-low read", "Texas"),
+    ("Y Cross - Deep crossing route from the tight end/Y receiver", "Y Cross"),
 ]
 PASS_INTERMEDIATE_MIN, PASS_INTERMEDIATE_MAX = 4, 6
 
@@ -106,7 +107,11 @@ class MultiSelectStepView(discord.ui.View):
 
     async def _on_select(self, interaction: discord.Interaction):
         self.selected = self.select.values
-        self.select.placeholder = f"{len(self.selected)} selected"
+        ordered = sorted(self.selected, key=self.values_order.index)
+        preview = ", ".join(ordered)
+        if len(preview) > 95:
+            preview = preview[:92] + "..."
+        self.select.placeholder = preview
         await interaction.response.edit_message(view=self)
 
     async def _on_confirm_click(self, interaction: discord.Interaction):

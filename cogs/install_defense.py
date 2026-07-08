@@ -57,6 +57,7 @@ class DefenseMultiSelectView(discord.ui.View):
         super().__init__(timeout=180)
         self._on_confirm = on_confirm
         self.selected: list[str] = []
+        self.values_order = [value for _, value in options]
 
         select = discord.ui.Select(
             placeholder=placeholder,
@@ -77,7 +78,12 @@ class DefenseMultiSelectView(discord.ui.View):
     def _on_select(self, select: discord.ui.Select):
         async def callback(interaction: discord.Interaction):
             self.selected = select.values
-            await interaction.response.defer()
+            ordered = sorted(self.selected, key=self.values_order.index)
+            preview = ", ".join(ordered)
+            if len(preview) > 95:
+                preview = preview[:92] + "..."
+            select.placeholder = preview
+            await interaction.response.edit_message(view=self)
         return callback
 
     async def _on_confirm_click(self, interaction: discord.Interaction):
