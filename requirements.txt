@@ -2,3 +2,5 @@ discord.py
 requests
 Pillow
 aiohttp
+anthropic
+playwright
