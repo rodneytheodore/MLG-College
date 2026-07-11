@@ -283,21 +283,6 @@ class InstallDefenseModal3(discord.ui.Modal, title="Sub Packages (2 of 2)"):
         await wizard.start(interaction)
 
 
-class StepReviewView(discord.ui.View):
-    """Shown after a step's Confirm button — a final check before the
-    picks are locked in and the wizard advances."""
-
-    def __init__(self, on_confirm, on_edit):
-        super().__init__(timeout=120)
-        confirm_btn = discord.ui.Button(label="✅ Confirm & Continue", style=discord.ButtonStyle.success)
-        confirm_btn.callback = on_confirm
-        self.add_item(confirm_btn)
-
-        edit_btn = discord.ui.Button(label="← Change Selection", style=discord.ButtonStyle.secondary)
-        edit_btn.callback = on_edit
-        self.add_item(edit_btn)
-
-
 class DefenseCoveragePressureWizard:
     """Base Coverages → Pressure Packages, with Back support on the second step."""
 
@@ -327,18 +312,6 @@ class DefenseCoveragePressureWizard:
 
     async def _on_coverages(self, interaction: discord.Interaction, coverages: list[str]):
         self.coverages = coverages
-        preview = "\n".join(f"• {c}" for c in coverages)
-        view = StepReviewView(self._confirmed_coverages, self._redo_coverages)
-        await interaction.response.edit_message(
-            content=f"**Base coverages selected:**\n{preview}\n\n"
-                    f"Confirm to continue, or go back to change your selection.",
-            view=view,
-        )
-
-    async def _redo_coverages(self, interaction: discord.Interaction):
-        await self._show_coverages(interaction)
-
-    async def _confirmed_coverages(self, interaction: discord.Interaction):
         view = DefenseMultiSelectView(
             PRESSURE_TYPES, PRESSURE_TYPES_MAX_SELECT,
             f"Select pressure packages (up to {PRESSURE_TYPES_MAX_SELECT})",
@@ -356,31 +329,15 @@ class DefenseCoveragePressureWizard:
 
     async def _on_pressures(self, interaction: discord.Interaction, pressures: list[str]):
         self.pressures = pressures
-        preview = "\n".join(f"• {p}" for p in pressures)
-        view = StepReviewView(self._confirmed_pressures, self._redo_pressures)
-        await interaction.response.edit_message(
-            content=f"**Pressure packages selected:**\n{preview}\n\n"
-                    f"Confirm to continue, or go back to change your selection.",
-            view=view,
-        )
-
-    async def _redo_pressures(self, interaction: discord.Interaction):
-        view = DefenseMultiSelectView(
-            PRESSURE_TYPES, PRESSURE_TYPES_MAX_SELECT,
-            f"Select pressure packages (up to {PRESSURE_TYPES_MAX_SELECT})",
-            self._on_pressures,
-            on_back=self._on_back,
-            preselected=self.pressures or None,
-        )
-        await interaction.response.edit_message(
-            content="**Defensive Install (4 of 4)** — Select your pressure packages:",
-            view=view,
-        )
-
-    async def _confirmed_pressures(self, interaction: discord.Interaction):
+        coverage_preview = "\n".join(f"• {c}" for c in self.coverages)
+        pressure_preview = "\n".join(f"• {p}" for p in pressures)
         view = DefenseInstallConfirmView(self.abbr, self.formations, self.sub_packages, self.coverages, self.pressures)
         await interaction.response.edit_message(
-            content="**Defensive Install — confirm?**",
+            content=(
+                "**Defensive Install — review & save:**\n"
+                f"**Base Coverages:**\n{coverage_preview}\n\n"
+                f"**Pressure Packages:**\n{pressure_preview}"
+            ),
             view=view,
         )
 
