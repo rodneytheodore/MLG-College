@@ -6,6 +6,7 @@ from discord.ext import commands
 
 from utils.data import (
     load_teams,
+    load_teams_by_conference,
     load_roster,
     load_scheme_cards,
     save_scheme_cards,
@@ -581,13 +582,25 @@ class SchemeCards(commands.Cog):
         await channel.purge(limit=300, check=lambda m: m.author == self.bot.user)
 
         cards = load_scheme_cards()
-        for abbr in sorted(cards.keys(), key=lambda a: self.teams[a]["name"]):
-            card = cards[abbr]
-            if not card.get("offense") or not card.get("defense"):
+        by_conference = load_teams_by_conference()
+
+        for conf_name, conf_teams in by_conference.items():
+            ready = []
+            for team in conf_teams:
+                abbr = team["abbr"].upper()
+                card = cards.get(abbr)
+                if card and card.get("offense") and card.get("defense"):
+                    ready.append(team)
+            if not ready:
                 continue
-            embed = build_compact_scheme_card_embed(self.teams[abbr], card)
-            view = ExpandSchemeCardView(abbr=abbr)
-            await channel.send(embed=embed, view=view, allowed_mentions=discord.AllowedMentions.none())
+
+            await channel.send(f"**{conf_name}**", allowed_mentions=discord.AllowedMentions.none())
+
+            for team in sorted(ready, key=lambda t: t["name"]):
+                abbr = team["abbr"].upper()
+                embed = build_compact_scheme_card_embed(self.teams[abbr], cards[abbr])
+                view = ExpandSchemeCardView(abbr=abbr)
+                await channel.send(embed=embed, view=view, allowed_mentions=discord.AllowedMentions.none())
 
     def resolve_owned_team(self, interaction: discord.Interaction, roster: dict):
         owned = [a for a, info in roster.items() if info.get("user_id") == interaction.user.id]
