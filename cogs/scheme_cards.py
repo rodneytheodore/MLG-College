@@ -553,7 +553,7 @@ class SchemeCards(commands.Cog):
         persistent views don't survive a restart on their own."""
         cards = load_scheme_cards()
         for abbr, card in cards.items():
-            if not card.get("offense") and not card.get("defense"):
+            if not card.get("offense") or not card.get("defense"):
                 continue
             if abbr not in self.teams:
                 continue
@@ -583,7 +583,7 @@ class SchemeCards(commands.Cog):
         cards = load_scheme_cards()
         for abbr in sorted(cards.keys(), key=lambda a: self.teams[a]["name"]):
             card = cards[abbr]
-            if not card.get("offense") and not card.get("defense"):
+            if not card.get("offense") or not card.get("defense"):
                 continue
             embed = build_compact_scheme_card_embed(self.teams[abbr], card)
             view = ExpandSchemeCardView(abbr=abbr)
