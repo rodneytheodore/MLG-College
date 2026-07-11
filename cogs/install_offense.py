@@ -83,11 +83,12 @@ def save_offense_installs(data: dict):
 class MultiSelectStepView(discord.ui.View):
     def __init__(self, options: list[tuple[str, str]], max_select: int, label: str,
                  on_confirm, min_select: int = 1, on_back=None, preselected: list[str] | None = None):
-        super().__init__(timeout=120)
+        super().__init__(timeout=600)
         self.values_order = [value for _, value in options]
         self.on_confirm = on_confirm
         self.min_select = min_select
         self.selected: list[str] = list(preselected) if preselected else []
+        self.message: discord.Message | None = None
 
         preselected_set = set(preselected or [])
         self.select = discord.ui.Select(
@@ -136,6 +137,18 @@ class MultiSelectStepView(discord.ui.View):
             child.disabled = True
         await self.on_confirm(interaction, ordered)
 
+    async def on_timeout(self):
+        for child in self.children:
+            child.disabled = True
+        if self.message is not None:
+            try:
+                await self.message.edit(
+                    content="⏱️ This install session timed out from inactivity. Run `/install_offense` again to pick back up.",
+                    view=self,
+                )
+            except discord.HTTPException:
+                pass
+
 
 # ---- Continue button (bridges modal → modal since Discord forbids modal → modal) ----
 
@@ -145,6 +158,7 @@ class _ContinueView(discord.ui.View):
     def __init__(self, label: str, on_click):
         super().__init__(timeout=300)
         self._on_click = on_click
+        self.message: discord.Message | None = None
         btn = discord.ui.Button(label=label, style=discord.ButtonStyle.primary)
         btn.callback = self._handle
         self.add_item(btn)
@@ -160,6 +174,18 @@ class _ContinueView(discord.ui.View):
             pass
         # Use the interaction response to open the next modal.
         await self._on_click(interaction)
+
+    async def on_timeout(self):
+        for child in self.children:
+            child.disabled = True
+        if self.message is not None:
+            try:
+                await self.message.edit(
+                    content="⏱️ This install session timed out from inactivity. Run `/install_offense` again to pick back up.",
+                    view=self,
+                )
+            except discord.HTTPException:
+                pass
 
 
 # ---- Modals ----
@@ -189,6 +215,7 @@ class InstallOffenseModal1(discord.ui.Modal, title="Base Formations (1 of 3)"):
         await interaction.response.send_message(
             "**Formations 01–05 saved.** Click to continue:", view=view, ephemeral=True
         )
+        view.message = await interaction.original_response()
 
 
 class InstallOffenseModal2(discord.ui.Modal, title="Base Formations (2 of 3)"):
@@ -218,6 +245,7 @@ class InstallOffenseModal2(discord.ui.Modal, title="Base Formations (2 of 3)"):
         await interaction.response.send_message(
             "**Formations 06–10 saved.** Click to continue:", view=view, ephemeral=True
         )
+        view.message = await interaction.original_response()
 
 
 class InstallOffenseModal3(discord.ui.Modal, title="Base Formations (3 of 3)"):
@@ -288,8 +316,10 @@ class OffenseConceptsWizard:
         )
         if first:
             await interaction.response.send_message(content, view=view, ephemeral=True)
+            view.message = await interaction.original_response()
         else:
             await interaction.response.edit_message(content=content, view=view)
+            view.message = interaction.message
 
     async def _on_forward(self, interaction: discord.Interaction, selected: list[str]):
         key = CONCEPT_STEPS[self.index][0]
