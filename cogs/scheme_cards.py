@@ -656,10 +656,10 @@ class SchemeCards(commands.Cog):
             cards[abbr] = card
         save_scheme_cards(cards)
 
-        await self.refresh_scheme_cards_channel()
-
         cleared = {"both": "offense and defense schemes", "offense": "offense scheme", "defense": "defense scheme"}[side_value]
         await send_ephemeral(interaction, f"Cleared the {cleared} for **{self.teams[abbr]['name']}**.")
+
+        await self.refresh_scheme_cards_channel()
 
     @clear_scheme_card.autocomplete("team")
     async def clear_scheme_card_team_autocomplete(self, interaction: discord.Interaction, current: str):
