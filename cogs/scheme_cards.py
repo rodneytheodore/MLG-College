@@ -68,6 +68,18 @@ OFFENSE_STEP_NAMES = [
 DEFENSE_STEP_NAMES = ["Scheme", "Coverage Shell", "Coverage Type"]
 
 
+EMBED_FIELD_LIMIT = 1024
+
+
+def _trunc_field(value: str, limit: int = EMBED_FIELD_LIMIT) -> str:
+    """Defensively keep an embed field value under Discord's 1024-char cap,
+    even if older saved data (from before input was capped) is longer."""
+    value = value or "Not set"
+    if len(value) <= limit:
+        return value
+    return value[: limit - 1].rstrip() + "\u2026"
+
+
 def build_scheme_card_embed(team_info: dict, card: dict) -> discord.Embed:
     embed = discord.Embed(
         title=team_info["name"],
@@ -89,15 +101,15 @@ def build_scheme_card_embed(team_info: dict, card: dict) -> discord.Embed:
         lines.append(f"**Personnel:** {offense.get('personnel', 'Not set')}")
         lines.append(f"**Tendency:** {offense.get('run_pass', 'Not set')}")
         lines.append(f"**Tempo:** {offense.get('tempo', 'Not set')}")
-        lines.append(f"**Summary:** {offense.get('summary', 'Not set')}")
-        embed.add_field(name="OFFENSE", value="\n".join(lines), inline=False)
+        embed.add_field(name="OFFENSE", value=_trunc_field("\n".join(lines)), inline=False)
+        embed.add_field(name="Offense Summary", value=_trunc_field(offense.get("summary")), inline=False)
 
     defense = card.get("defense")
     if defense:
         lines = [f"**Scheme:** {defense.get('scheme', 'Not set')}  \u2022  **Identity:** {defense.get('coverage_type', 'Not set')}"]
         lines.append(f"**Coaching Tree:** {defense.get('coaching_tree', 'Not set')}  \u2022  **Shell:** {defense.get('coverage_shell', 'Not set')}")
-        lines.append(f"**Summary:** {defense.get('summary', 'Not set')}")
-        embed.add_field(name="DEFENSE", value="\n".join(lines), inline=False)
+        embed.add_field(name="DEFENSE", value=_trunc_field("\n".join(lines)), inline=False)
+        embed.add_field(name="Defense Summary", value=_trunc_field(defense.get("summary")), inline=False)
 
     if card.get("last_updated"):
         embed.set_footer(text=f"Last updated: {card['last_updated']}")
@@ -504,10 +516,10 @@ class DefenseWizard:
 # ---------- Initial detail modals (popup text fields, shown first) ----------
 
 class OffenseDetailsModal(discord.ui.Modal, title="Offense Details (Part 1 of 2)"):
-    coaching_tree = discord.ui.TextInput(label="Coaching Tree (1 or 2 coaches)", required=True)
-    base_playbook = discord.ui.TextInput(label="Base Playbook (e.g. Air Raid)", required=True)
-    summary = discord.ui.TextInput(label="Summary", style=discord.TextStyle.paragraph, required=True)
-    film = discord.ui.TextInput(label="Stream Link (Twitch, YouTube, etc.)", required=True)
+    coaching_tree = discord.ui.TextInput(label="Coaching Tree (1 or 2 coaches)", required=True, max_length=100)
+    base_playbook = discord.ui.TextInput(label="Base Playbook (e.g. Air Raid)", required=True, max_length=60)
+    summary = discord.ui.TextInput(label="Summary", style=discord.TextStyle.paragraph, required=True, max_length=1000)
+    film = discord.ui.TextInput(label="Stream Link (Twitch, YouTube, etc.)", required=True, max_length=300)
 
     def __init__(self, cog: "SchemeCards", abbr: str):
         super().__init__()
@@ -527,8 +539,8 @@ class OffenseDetailsModal(discord.ui.Modal, title="Offense Details (Part 1 of 2)
 
 
 class DefenseDetailsModal(discord.ui.Modal, title="Defense Details (Part 1 of 2)"):
-    coaching_tree = discord.ui.TextInput(label="Coaching Tree (1 or 2 coaches)", required=True)
-    summary = discord.ui.TextInput(label="Summary", style=discord.TextStyle.paragraph, required=True)
+    coaching_tree = discord.ui.TextInput(label="Coaching Tree (1 or 2 coaches)", required=True, max_length=100)
+    summary = discord.ui.TextInput(label="Summary", style=discord.TextStyle.paragraph, required=True, max_length=1000)
 
     def __init__(self, cog: "SchemeCards", abbr: str):
         super().__init__()
