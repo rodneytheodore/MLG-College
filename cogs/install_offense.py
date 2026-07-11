@@ -79,20 +79,51 @@ def save_offense_installs(data: dict):
         json.dump(data, f, indent=2)
 
 
-# ---- Multi-select view (same pattern as scheme_cards) ----
+def load_offense_install_drafts() -> dict:
+    """In-progress /install_offense sessions, keyed by team abbr. Persisted
+    to disk (not just held in memory) so a bot restart mid-wizard doesn't
+    strand the user with dead buttons — see PersistentConceptStepView."""
+    path = os.path.join(DATA_DIR, "offense_install_drafts.json")
+    if not os.path.exists(path):
+        return {}
+    with open(path) as f:
+        return json.load(f)
 
-class MultiSelectStepView(discord.ui.View):
-    def __init__(self, options: list[tuple[str, str]], max_select: int, label: str,
-                 on_confirm, min_select: int = 1, on_back=None, preselected: list[str] | None = None):
-        super().__init__(timeout=600)
-        self.values_order = [value for _, value in options]
-        self.on_confirm = on_confirm
+
+def save_offense_install_drafts(data: dict):
+    os.makedirs(DATA_DIR, exist_ok=True)
+    path = os.path.join(DATA_DIR, "offense_install_drafts.json")
+    with open(path, "w") as f:
+        json.dump(data, f, indent=2)
+
+
+# ---- Persistent multi-select step view ----
+#
+# Unlike a plain discord.ui.View (which only lives in memory for the
+# process that created it), this view is registered with timeout=None and
+# stable custom_ids, and its state is read fresh from disk on every
+# interaction rather than from Python closures. That means it keeps working
+# even if the bot restarts between when a step is shown and when the user
+# clicks it — the exact scenario that caused silent "Interaction failed"
+# clicks with nothing in the logs.
+
+class PersistentConceptStepView(discord.ui.View):
+    def __init__(self, abbr: str, step_index: int):
+        super().__init__(timeout=None)
+        self.abbr = abbr
+        self.step_index = step_index
+        key, options, max_select, min_select, label = CONCEPT_STEPS[step_index]
+        self.key = key
         self.min_select = min_select
-        self.selected: list[str] = list(preselected) if preselected else []
-        self.message: discord.Message | None = None
+        self.values_order = [value for _, value in options]
 
-        preselected_set = set(preselected or [])
+        drafts = load_offense_install_drafts()
+        draft = drafts.get(abbr) or {}
+        preselected = draft.get("data", {}).get(key) or []
+        preselected_set = set(preselected)
+
         self.select = discord.ui.Select(
+            custom_id=f"oi_select:{abbr}:{step_index}",
             placeholder=f"Select {min_select}-{max_select} {label.lower()}...",
             min_values=min_select,
             max_values=min(max_select, len(options)),
@@ -104,23 +135,55 @@ class MultiSelectStepView(discord.ui.View):
         self.select.callback = self._on_select
         self.add_item(self.select)
 
-        if self.selected:
-            ordered = sorted(self.selected, key=self.values_order.index)
+        if preselected:
+            ordered = sorted(preselected, key=self.values_order.index)
             preview = ", ".join(ordered)
             self.select.placeholder = preview[:92] + "..." if len(preview) > 95 else preview
 
-        if on_back is not None:
-            back_btn = discord.ui.Button(label="← Back", style=discord.ButtonStyle.secondary)
-            back_btn.callback = on_back
+        if step_index > 0:
+            back_btn = discord.ui.Button(
+                label="← Back", style=discord.ButtonStyle.secondary,
+                custom_id=f"oi_back:{abbr}:{step_index}",
+            )
+            back_btn.callback = self._on_back
             self.add_item(back_btn)
 
-        confirm_btn = discord.ui.Button(label="Confirm Selection", style=discord.ButtonStyle.success)
+        confirm_btn = discord.ui.Button(
+            label="Confirm Selection", style=discord.ButtonStyle.success,
+            custom_id=f"oi_confirm:{abbr}:{step_index}",
+        )
         confirm_btn.callback = self._on_confirm_click
         self.add_item(confirm_btn)
 
+    @staticmethod
+    def content_for(step_index: int) -> str:
+        _, _, max_select, min_select, label = CONCEPT_STEPS[step_index]
+        return (
+            f"**Offensive Install — {label.title()}** "
+            f"(step {step_index + 1}/{len(CONCEPT_STEPS)}, pick {min_select}-{max_select}, then confirm):"
+        )
+
+    async def _guard_owner(self, interaction: discord.Interaction) -> bool:
+        roster = load_roster()
+        owner_id = (roster.get(self.abbr) or {}).get("user_id")
+        if owner_id != interaction.user.id:
+            await interaction.response.send_message(
+                "Only the team owner who started this install can use it. Run `/install_offense` yourself to start your own.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
     async def _on_select(self, interaction: discord.Interaction):
-        self.selected = self.select.values
-        ordered = sorted(self.selected, key=self.values_order.index)
+        if not await self._guard_owner(interaction):
+            return
+        selected = self.select.values
+        drafts = load_offense_install_drafts()
+        draft = drafts.setdefault(self.abbr, {"formations": [], "data": {}, "step_index": self.step_index})
+        draft["data"][self.key] = selected
+        save_offense_install_drafts(drafts)
+
+        ordered = sorted(selected, key=self.values_order.index)
         preview = ", ".join(ordered)
         if len(preview) > 95:
             preview = preview[:92] + "..."
@@ -128,30 +191,46 @@ class MultiSelectStepView(discord.ui.View):
         await interaction.response.edit_message(view=self)
 
     async def _on_confirm_click(self, interaction: discord.Interaction):
-        if len(self.selected) < self.min_select:
+        if not await self._guard_owner(interaction):
+            return
+        drafts = load_offense_install_drafts()
+        draft = drafts.get(self.abbr) or {}
+        selected = draft.get("data", {}).get(self.key) or []
+        if len(selected) < self.min_select:
             await interaction.response.send_message(
                 f"Select at least {self.min_select} option(s) first.", ephemeral=True
             )
             return
-        ordered = sorted(self.selected, key=self.values_order.index)
-        for child in self.children:
-            child.disabled = True
-        await self.on_confirm(interaction, ordered)
 
-    async def on_timeout(self):
-        for child in self.children:
-            child.disabled = True
-        if self.message is not None:
-            try:
-                await self.message.edit(
-                    content="⏱️ This install session timed out from inactivity. Run `/install_offense` again to pick back up.",
-                    view=self,
-                )
-            except discord.HTTPException:
-                pass
+        next_index = self.step_index + 1
+        draft["step_index"] = next_index
+        drafts[self.abbr] = draft
+        save_offense_install_drafts(drafts)
+
+        if next_index >= len(CONCEPT_STEPS):
+            data = {"formations": draft.get("formations", []), **draft.get("data", {})}
+            drafts.pop(self.abbr, None)
+            save_offense_install_drafts(drafts)
+            await _save_and_show(interaction, self.abbr, data)
+        else:
+            view = PersistentConceptStepView(self.abbr, next_index)
+            await interaction.response.edit_message(content=view.content_for(next_index), view=view)
+
+    async def _on_back(self, interaction: discord.Interaction):
+        if not await self._guard_owner(interaction):
+            return
+        prev_index = self.step_index - 1
+        drafts = load_offense_install_drafts()
+        draft = drafts.get(self.abbr)
+        if draft is not None:
+            draft["step_index"] = prev_index
+            drafts[self.abbr] = draft
+            save_offense_install_drafts(drafts)
+        view = PersistentConceptStepView(self.abbr, prev_index)
+        await interaction.response.edit_message(content=view.content_for(prev_index), view=view)
 
     async def on_error(self, interaction: discord.Interaction, error: Exception, item: discord.ui.Item):
-        print(f"[install_offense] MultiSelectStepView error on {item!r}: {error!r}")
+        print(f"[install_offense] PersistentConceptStepView error on {item!r}: {error!r}")
         traceback.print_exc()
         message = "Something went wrong with that step. Please run `/install_offense` again."
         try:
@@ -301,8 +380,7 @@ class InstallOffenseModal3(discord.ui.Modal, title="Base Formations (3 of 3)"):
             return
 
         abbr = self.abbr
-        wizard = OffenseConceptsWizard(abbr, all_formations)
-        await wizard.start(interaction)
+        await start_offense_concepts(interaction, abbr, all_formations)
 
 
 CONCEPT_STEPS = [
@@ -313,52 +391,16 @@ CONCEPT_STEPS = [
 ]
 
 
-class OffenseConceptsWizard:
-    """Run Concepts → Quick Pass → Intermediate Pass → Deep Pass, with Back
-    support at every step after the first. Going back re-shows that step
-    with its previous selection pre-checked."""
+async def start_offense_concepts(interaction: discord.Interaction, abbr: str, formations: list[str]):
+    """Creates the on-disk draft (overwriting any stale one for this abbr)
+    and shows step 0. From here on, all state lives on disk keyed by abbr,
+    not in a Python object — see PersistentConceptStepView."""
+    drafts = load_offense_install_drafts()
+    drafts[abbr] = {"formations": formations, "data": {}, "step_index": 0}
+    save_offense_install_drafts(drafts)
 
-    def __init__(self, abbr: str, formations: list[str]):
-        self.abbr = abbr
-        self.formations = formations
-        self.data: dict = {}
-        self.index = 0
-
-    async def start(self, interaction: discord.Interaction):
-        await self._show_step(interaction, first=True)
-
-    async def _show_step(self, interaction: discord.Interaction, first: bool = False):
-        key, options, max_select, min_select, label = CONCEPT_STEPS[self.index]
-        view = MultiSelectStepView(
-            options, max_select, label, self._on_forward, min_select=min_select,
-            on_back=self._on_back if self.index > 0 else None,
-            preselected=self.data.get(key),
-        )
-        step_num = self.index + 1
-        content = (
-            f"**Offensive Install — {label.title()}** "
-            f"(step {step_num}/{len(CONCEPT_STEPS)}, pick {min_select}-{max_select}, then confirm):"
-        )
-        if first:
-            await interaction.response.send_message(content, view=view, ephemeral=True)
-            view.message = await interaction.original_response()
-        else:
-            await interaction.response.edit_message(content=content, view=view)
-            view.message = interaction.message
-
-    async def _on_forward(self, interaction: discord.Interaction, selected: list[str]):
-        key = CONCEPT_STEPS[self.index][0]
-        self.data[key] = selected
-        self.index += 1
-        if self.index >= len(CONCEPT_STEPS):
-            full_data = {"formations": self.formations, **self.data}
-            await _save_and_show(interaction, self.abbr, full_data)
-        else:
-            await self._show_step(interaction)
-
-    async def _on_back(self, interaction: discord.Interaction):
-        self.index -= 1
-        await self._show_step(interaction)
+    view = PersistentConceptStepView(abbr, 0)
+    await interaction.response.send_message(view.content_for(0), view=view, ephemeral=True)
 
 
 async def _save_and_show(interaction: discord.Interaction, abbr: str, data: dict):
@@ -403,6 +445,16 @@ async def _save_and_show(interaction: discord.Interaction, abbr: str, data: dict
 class InstallOffense(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+
+    def register_active_views(self):
+        """Re-registers a persistent view for every in-progress install
+        draft so its buttons keep working across a bot restart. Must be
+        called once after the bot logs in, same as the other cogs' views."""
+        drafts = load_offense_install_drafts()
+        for abbr, draft in drafts.items():
+            step_index = draft.get("step_index", 0)
+            if 0 <= step_index < len(CONCEPT_STEPS):
+                self.bot.add_view(PersistentConceptStepView(abbr, step_index))
 
     @app_commands.command(
         name="install_offense",

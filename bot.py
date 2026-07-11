@@ -43,6 +43,11 @@ class MLGBot(commands.Bot):
             draft_cog.register_active_views()
             print("Registered persistent view for draft pick button.")
 
+        install_offense_cog = self.get_cog("InstallOffense")
+        if install_offense_cog is not None:
+            install_offense_cog.register_active_views()
+            print("Registered persistent views for in-progress offense installs.")
+
         guild = discord.Object(id=GUILD_ID)
 
         # Copy the currently-registered global commands into the guild bucket
