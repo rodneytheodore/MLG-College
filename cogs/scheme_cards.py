@@ -620,6 +620,51 @@ class SchemeCards(commands.Cog):
 
         await interaction.response.send_modal(DefenseDetailsModal(cog=self, abbr=abbr))
 
+    @app_commands.command(name="clear_scheme_card", description="Clear a team's scheme card (admin only)")
+    @app_commands.describe(team="Team to clear", side="Which scheme(s) to clear")
+    @app_commands.choices(side=[
+        app_commands.Choice(name="Both (offense + defense)", value="both"),
+        app_commands.Choice(name="Offense only", value="offense"),
+        app_commands.Choice(name="Defense only", value="defense"),
+    ])
+    async def clear_scheme_card(self, interaction: discord.Interaction, team: str, side: app_commands.Choice[str] = None):
+        if not is_admin(interaction):
+            await send_ephemeral(interaction, "Only admins can clear scheme cards.")
+            return
+
+        abbr, error = resolve_team(team, self.teams)
+        if error:
+            await send_ephemeral(interaction, error)
+            return
+
+        side_value = side.value if side else "both"
+
+        cards = load_scheme_cards()
+        card = cards.get(abbr)
+        if not card or (not card.get("offense") and not card.get("defense")):
+            await send_ephemeral(interaction, f"**{self.teams[abbr]['name']}** doesn't have a scheme card set.")
+            return
+
+        if side_value in ("both", "offense"):
+            card.pop("offense", None)
+        if side_value in ("both", "defense"):
+            card.pop("defense", None)
+
+        if not card.get("offense") and not card.get("defense"):
+            cards.pop(abbr, None)
+        else:
+            cards[abbr] = card
+        save_scheme_cards(cards)
+
+        await self.refresh_scheme_cards_channel()
+
+        cleared = {"both": "offense and defense schemes", "offense": "offense scheme", "defense": "defense scheme"}[side_value]
+        await send_ephemeral(interaction, f"Cleared the {cleared} for **{self.teams[abbr]['name']}**.")
+
+    @clear_scheme_card.autocomplete("team")
+    async def clear_scheme_card_team_autocomplete(self, interaction: discord.Interaction, current: str):
+        return await self.team_autocomplete(interaction, current)
+
     @app_commands.command(name="post_scheme_cards", description="Set this channel as the live scheme cards display (admin only)")
     async def post_scheme_cards(self, interaction: discord.Interaction):
         if not is_admin(interaction):
