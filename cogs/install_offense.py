@@ -1,5 +1,6 @@
 import json
 import os
+import traceback
 from datetime import datetime, timezone
 
 import discord
@@ -149,6 +150,18 @@ class MultiSelectStepView(discord.ui.View):
             except discord.HTTPException:
                 pass
 
+    async def on_error(self, interaction: discord.Interaction, error: Exception, item: discord.ui.Item):
+        print(f"[install_offense] MultiSelectStepView error on {item!r}: {error!r}")
+        traceback.print_exc()
+        message = "Something went wrong with that step. Please run `/install_offense` again."
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send(message, ephemeral=True)
+            else:
+                await interaction.response.send_message(message, ephemeral=True)
+        except discord.HTTPException:
+            pass
+
 
 # ---- Continue button (bridges modal → modal since Discord forbids modal → modal) ----
 
@@ -186,6 +199,18 @@ class _ContinueView(discord.ui.View):
                 )
             except discord.HTTPException:
                 pass
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception, item: discord.ui.Item):
+        print(f"[install_offense] _ContinueView error on {item!r}: {error!r}")
+        traceback.print_exc()
+        message = "Something went wrong continuing that step. Please run `/install_offense` again."
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send(message, ephemeral=True)
+            else:
+                await interaction.response.send_message(message, ephemeral=True)
+        except discord.HTTPException:
+            pass
 
 
 # ---- Modals ----
