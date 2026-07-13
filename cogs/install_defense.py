@@ -8,7 +8,9 @@ from discord.ext import commands
 
 from utils.data import load_roster, load_teams
 from utils.responses import send_ephemeral
-from cogs.scheduling import refresh_dashboard
+# NOTE: refresh_dashboard is imported lazily (inside the confirm handler,
+# not here) to match install_offense.py / scheme_cards.py and avoid any
+# risk of a circular import with cogs.scheduling.
 
 DATA_DIR = os.environ.get("DATA_DIR", "data").strip()
 
@@ -158,6 +160,7 @@ class DefenseInstallConfirmView(discord.ui.View):
         for child in self.children:
             child.disabled = True
         await interaction.response.edit_message(content=None, embed=embed, view=self)
+        from cogs.scheduling import refresh_dashboard
         await refresh_dashboard(interaction.client)
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)

@@ -9,7 +9,11 @@ from discord.ext import commands
 
 from utils.data import load_roster, load_teams
 from utils.responses import send_ephemeral
-from cogs.scheduling import refresh_dashboard
+# NOTE: refresh_dashboard is imported lazily (inside _save_and_show, not
+# here) because this module is imported by cogs.scheme_cards at module load
+# time, which is itself imported by cogs.scheduling at module load time. A
+# top-level import here would create a circular import and crash the bot
+# on startup.
 
 DATA_DIR = os.environ.get("DATA_DIR", "data").strip()
 
@@ -439,6 +443,7 @@ async def _save_and_show(interaction: discord.Interaction, abbr: str, data: dict
     embed.set_footer(text=f"Last updated: {submitted}")
 
     await interaction.response.edit_message(content=None, embed=embed, view=None)
+    from cogs.scheduling import refresh_dashboard
     await refresh_dashboard(interaction.client)
 
 

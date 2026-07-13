@@ -17,7 +17,11 @@ from utils.data import (
     true_display_name,
 )
 from utils.responses import send_ephemeral
-from cogs.scheduling import refresh_dashboard
+# NOTE: refresh_dashboard is imported lazily (inside the functions that use
+# it, not here at module level) because cogs.scheduling itself imports from
+# this module at import time (build_compact_scheme_card_embed,
+# ExpandSchemeCardView). A top-level import here would create a circular
+# import and crash the bot on startup.
 
 
 # ---------- Option lists: (label, value) ----------
@@ -451,6 +455,7 @@ class OffenseWizard:
             view=None,
         )
         await self.cog.refresh_scheme_cards_channel()
+        from cogs.scheduling import refresh_dashboard
         await refresh_dashboard(self.cog.bot)
 
 
@@ -513,6 +518,7 @@ class DefenseWizard:
             view=None,
         )
         await self.cog.refresh_scheme_cards_channel()
+        from cogs.scheduling import refresh_dashboard
         await refresh_dashboard(self.cog.bot)
 
 
@@ -688,6 +694,7 @@ class SchemeCards(commands.Cog):
         await send_ephemeral(interaction, f"Cleared the {cleared} for **{self.teams[abbr]['name']}**.")
 
         await self.refresh_scheme_cards_channel()
+        from cogs.scheduling import refresh_dashboard
         await refresh_dashboard(self.bot)
 
     @clear_scheme_card.autocomplete("team")
