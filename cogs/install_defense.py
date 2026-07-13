@@ -1,5 +1,6 @@
 import json
 import os
+import traceback
 from datetime import datetime, timezone
 
 import discord
@@ -35,6 +36,15 @@ BASE_COVERAGES_MAX_SELECT = 4
 
 
 # ---- Storage ----
+#
+# A single drafts file tracks the WHOLE flow now — the 3-modal chain
+# (formations → sub packages) as well as the coverage/pressure select
+# steps and the final review — not just the select steps. Every step
+# writes its progress here before showing the next control, and every
+# control that can be clicked later is a persistent, custom_id-based view
+# read fresh from this file. A bot restart at ANY point in the flow leaves
+# a resumable, clickable control behind instead of a dead one — see
+# register_active_views() below.
 
 def load_defense_installs() -> dict:
     path = os.path.join(DATA_DIR, "defense_installs.json")
@@ -51,100 +61,305 @@ def save_defense_installs(data: dict):
         json.dump(data, f, indent=2)
 
 
-# ---- Shared multi-select view ----
+def load_defense_install_drafts() -> dict:
+    path = os.path.join(DATA_DIR, "defense_install_drafts.json")
+    if not os.path.exists(path):
+        return {}
+    with open(path) as f:
+        return json.load(f)
 
-class DefenseMultiSelectView(discord.ui.View):
-    """Reusable multi-select step with a Confirm button."""
 
-    def __init__(self, options: list[tuple[str, str]], max_values: int, placeholder: str, on_confirm,
-                 on_back=None, preselected: list[str] | None = None):
-        super().__init__(timeout=180)
-        self._on_confirm = on_confirm
-        self.selected: list[str] = list(preselected) if preselected else []
-        self.values_order = [value for _, value in options]
+def save_defense_install_drafts(data: dict):
+    os.makedirs(DATA_DIR, exist_ok=True)
+    path = os.path.join(DATA_DIR, "defense_install_drafts.json")
+    with open(path, "w") as f:
+        json.dump(data, f, indent=2)
 
-        preselected_set = set(preselected or [])
-        select = discord.ui.Select(
-            placeholder=placeholder,
-            min_values=1,
-            max_values=max_values,
-            options=[
-                discord.SelectOption(label=label[:100], value=value[:100], default=value in preselected_set)
-                for label, value in options
-            ],
+
+async def _guard_owner(interaction: discord.Interaction, abbr: str) -> bool:
+    roster = load_roster()
+    owner_id = (roster.get(abbr) or {}).get("user_id")
+    if owner_id != interaction.user.id:
+        await interaction.response.send_message(
+            "Only the team owner who started this install can use it. Run `/install_defense` yourself to start your own.",
+            ephemeral=True,
         )
-        select.callback = self._on_select(select)
-        self.add_item(select)
+        return False
+    return True
 
-        if self.selected:
-            ordered = sorted(self.selected, key=self.values_order.index)
-            preview = ", ".join(ordered)
-            select.placeholder = preview[:92] + "..." if len(preview) > 95 else preview
 
-        if on_back is not None:
-            back_btn = discord.ui.Button(label="← Back", style=discord.ButtonStyle.secondary)
-            back_btn.callback = on_back
-            self.add_item(back_btn)
+async def _on_view_error(interaction: discord.Interaction, source: str, error: Exception):
+    print(f"[install_defense] {source} error: {error!r}")
+    traceback.print_exc()
+    message = "Something went wrong with that step. Please run `/install_defense` again."
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(message, ephemeral=True)
+        else:
+            await interaction.response.send_message(message, ephemeral=True)
+    except discord.HTTPException:
+        pass
 
-        btn = discord.ui.Button(label="Confirm →", style=discord.ButtonStyle.primary)
-        btn.callback = self._on_confirm_click
+
+# ---- Persistent "Continue" bridge between chained modals ----
+#
+# Discord forbids opening a modal directly from a modal's on_submit, so a
+# button bridges each transition. This button is registered with
+# timeout=None and a stable custom_id, and reads the accumulated
+# formations/sub packages from disk rather than a Python closure — so it
+# keeps working even if the bot restarts while it's the only thing on
+# screen.
+
+CONTINUE_LABELS = {
+    2: "Continue → Sub Packages 01–05",
+    3: "Continue → Sub Packages 06–08",
+}
+
+
+class PersistentContinueView(discord.ui.View):
+    def __init__(self, abbr: str, target_modal: int):
+        super().__init__(timeout=None)
+        self.abbr = abbr
+        self.target_modal = target_modal
+        btn = discord.ui.Button(
+            label=CONTINUE_LABELS[target_modal],
+            style=discord.ButtonStyle.primary,
+            custom_id=f"di_continue:{abbr}:{target_modal}",
+        )
+        btn.callback = self._on_click
         self.add_item(btn)
 
-    def _on_select(self, select: discord.ui.Select):
-        async def callback(interaction: discord.Interaction):
-            self.selected = select.values
-            ordered = sorted(self.selected, key=self.values_order.index)
-            preview = ", ".join(ordered)
-            if len(preview) > 95:
-                preview = preview[:92] + "..."
-            select.placeholder = preview
-            await interaction.response.edit_message(view=self)
-        return callback
-
-    async def _on_confirm_click(self, interaction: discord.Interaction):
-        if not self.selected:
+    async def _on_click(self, interaction: discord.Interaction):
+        if not await _guard_owner(interaction, self.abbr):
+            return
+        drafts = load_defense_install_drafts()
+        draft = drafts.get(self.abbr)
+        if draft is None:
             await interaction.response.send_message(
-                "Select at least one option before confirming.", ephemeral=True
+                "This install session has expired. Run `/install_defense` again.", ephemeral=True
             )
             return
-        await self._on_confirm(interaction, self.selected)
+        formations = draft.get("formations", [])
+        if self.target_modal == 2:
+            modal = InstallDefenseModal2(self.abbr, formations)
+        else:
+            sub_packages = draft.get("sub_packages", [])
+            modal = InstallDefenseModal3(self.abbr, formations, sub_packages)
+        await interaction.response.send_modal(modal)
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception, item: discord.ui.Item):
+        await _on_view_error(interaction, "PersistentContinueView", error)
 
 
-# ---- Final confirm view ----
+# ---- Persistent multi-select step view ----
 
-class DefenseInstallConfirmView(discord.ui.View):
-    def __init__(self, abbr: str, formations: list[str], sub_packages: list[str],
-                 coverages: list[str], pressures: list[str]):
-        super().__init__(timeout=60)
+DEFENSE_STEPS = [
+    (
+        "coverages", BASE_COVERAGES, BASE_COVERAGES_MAX_SELECT, 1,
+        f"Select base coverages (up to {BASE_COVERAGES_MAX_SELECT})",
+        "**Defensive Install (3 of 4)** — Select your base coverages:",
+    ),
+    (
+        "pressures", PRESSURE_TYPES, PRESSURE_TYPES_MAX_SELECT, 1,
+        f"Select pressure packages (up to {PRESSURE_TYPES_MAX_SELECT})",
+        "**Defensive Install (4 of 4)** — Select your pressure packages:",
+    ),
+]
+
+
+class PersistentDefenseStepView(discord.ui.View):
+    def __init__(self, abbr: str, step_index: int):
+        super().__init__(timeout=None)
         self.abbr = abbr
-        self.formations = formations
-        self.sub_packages = sub_packages
-        self.coverages = coverages
-        self.pressures = pressures
+        self.step_index = step_index
+        key, options, max_select, min_select, placeholder, _header = DEFENSE_STEPS[step_index]
+        self.key = key
+        self.min_select = min_select
+        self.values_order = [value for _, value in options]
 
-    @discord.ui.button(label="✅ Save Install", style=discord.ButtonStyle.success)
-    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        drafts = load_defense_install_drafts()
+        draft = drafts.get(abbr) or {}
+        preselected = draft.get("data", {}).get(key) or []
+        preselected_set = set(preselected)
+
+        self.select = discord.ui.Select(
+            custom_id=f"di_select:{abbr}:{step_index}",
+            placeholder=placeholder,
+            min_values=min_select,
+            max_values=min(max_select, len(options)),
+            options=[
+                discord.SelectOption(label=lbl[:100], value=val[:100], default=val in preselected_set)
+                for lbl, val in options
+            ],
+        )
+        self.select.callback = self._on_select
+        self.add_item(self.select)
+
+        if preselected:
+            ordered = sorted(preselected, key=self.values_order.index)
+            preview = ", ".join(ordered)
+            self.select.placeholder = preview[:92] + "..." if len(preview) > 95 else preview
+
+        if step_index > 0:
+            back_btn = discord.ui.Button(
+                label="← Back", style=discord.ButtonStyle.secondary,
+                custom_id=f"di_back:{abbr}:{step_index}",
+            )
+            back_btn.callback = self._on_back
+            self.add_item(back_btn)
+
+        confirm_btn = discord.ui.Button(
+            label="Confirm →", style=discord.ButtonStyle.primary,
+            custom_id=f"di_confirm:{abbr}:{step_index}",
+        )
+        confirm_btn.callback = self._on_confirm_click
+        self.add_item(confirm_btn)
+
+    @staticmethod
+    def content_for(step_index: int) -> str:
+        return DEFENSE_STEPS[step_index][5]
+
+    async def _on_select(self, interaction: discord.Interaction):
+        if not await _guard_owner(interaction, self.abbr):
+            return
+        selected = self.select.values
+        drafts = load_defense_install_drafts()
+        draft = drafts.setdefault(
+            self.abbr,
+            {"formations": [], "sub_packages": [], "data": {}, "step_index": self.step_index},
+        )
+        draft["data"][self.key] = selected
+        save_defense_install_drafts(drafts)
+
+        ordered = sorted(selected, key=self.values_order.index)
+        preview = ", ".join(ordered)
+        if len(preview) > 95:
+            preview = preview[:92] + "..."
+        self.select.placeholder = preview
+        await interaction.response.edit_message(view=self)
+
+    async def _on_confirm_click(self, interaction: discord.Interaction):
+        if not await _guard_owner(interaction, self.abbr):
+            return
+        drafts = load_defense_install_drafts()
+        draft = drafts.get(self.abbr) or {}
+        selected = draft.get("data", {}).get(self.key) or []
+        if len(selected) < self.min_select:
+            await interaction.response.send_message(
+                f"Select at least {self.min_select} option(s) first.", ephemeral=True
+            )
+            return
+
+        next_index = self.step_index + 1
+        draft["step_index"] = next_index
+        drafts[self.abbr] = draft
+        save_defense_install_drafts(drafts)
+
+        if next_index >= len(DEFENSE_STEPS):
+            await _show_final_review(interaction, self.abbr, draft)
+        else:
+            view = PersistentDefenseStepView(self.abbr, next_index)
+            await interaction.response.edit_message(content=view.content_for(next_index), view=view)
+
+    async def _on_back(self, interaction: discord.Interaction):
+        if not await _guard_owner(interaction, self.abbr):
+            return
+        prev_index = self.step_index - 1
+        drafts = load_defense_install_drafts()
+        draft = drafts.get(self.abbr)
+        if draft is not None:
+            draft["step_index"] = prev_index
+            drafts[self.abbr] = draft
+            save_defense_install_drafts(drafts)
+        view = PersistentDefenseStepView(self.abbr, prev_index)
+        await interaction.response.edit_message(content=view.content_for(prev_index), view=view)
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception, item: discord.ui.Item):
+        await _on_view_error(interaction, "PersistentDefenseStepView", error)
+
+
+async def _show_final_review(interaction: discord.Interaction, abbr: str, draft: dict):
+    data = draft.get("data", {})
+    coverage_preview = "\n".join(f"• {c}" for c in data.get("coverages", []))
+    pressure_preview = "\n".join(f"• {p}" for p in data.get("pressures", []))
+    view = PersistentDefenseConfirmView(abbr)
+    await interaction.response.edit_message(
+        content=(
+            "**Defensive Install — review & save:**\n"
+            f"**Base Coverages:**\n{coverage_preview}\n\n"
+            f"**Pressure Packages:**\n{pressure_preview}"
+        ),
+        view=view,
+    )
+
+
+# ---- Persistent final confirm view ----
+
+class PersistentDefenseConfirmView(discord.ui.View):
+    def __init__(self, abbr: str):
+        super().__init__(timeout=None)
+        self.abbr = abbr
+
+        confirm_btn = discord.ui.Button(
+            label="✅ Save Install", style=discord.ButtonStyle.success,
+            custom_id=f"di_final_confirm:{abbr}",
+        )
+        confirm_btn.callback = self._on_confirm
+        self.add_item(confirm_btn)
+
+        cancel_btn = discord.ui.Button(
+            label="Cancel", style=discord.ButtonStyle.secondary,
+            custom_id=f"di_final_cancel:{abbr}",
+        )
+        cancel_btn.callback = self._on_cancel
+        self.add_item(cancel_btn)
+
+    async def _on_confirm(self, interaction: discord.Interaction):
+        if not await _guard_owner(interaction, self.abbr):
+            return
+
+        drafts = load_defense_install_drafts()
+        draft = drafts.get(self.abbr)
+        if draft is None:
+            await interaction.response.send_message(
+                "This install session has expired. Run `/install_defense` again.", ephemeral=True
+            )
+            return
+
+        # Defer immediately: the disk write + dashboard refresh below could
+        # be slow enough on a cold volume mount to blow the 3s ack window,
+        # which is exactly what produces a silent "Interaction failed".
+        await interaction.response.defer()
+
+        formations = draft.get("formations", [])
+        sub_packages = draft.get("sub_packages", [])
+        data = draft.get("data", {})
+        coverages = data.get("coverages", [])
+        pressures = data.get("pressures", [])
+
         submitted = datetime.now(timezone.utc).strftime("%B %d, %Y")
-
         installs = load_defense_installs()
         installs[self.abbr] = {
-            "formations": self.formations,
-            "sub_packages": self.sub_packages,
-            "coverages": self.coverages,
-            "pressures": self.pressures,
+            "formations": formations,
+            "sub_packages": sub_packages,
+            "coverages": coverages,
+            "pressures": pressures,
             "last_updated": submitted,
         }
         save_defense_installs(installs)
+
+        drafts.pop(self.abbr, None)
+        save_defense_install_drafts(drafts)
 
         teams = load_teams()
         team = teams.get(self.abbr, {})
         team_color = int(team.get("color", "BA0C2F"), 16)
         team_name = team.get("name", self.abbr)
 
-        formation_val = "\n".join(f"`{i+1:02d}` {f}" for i, f in enumerate(self.formations))
-        subs_val = "\n".join(f"`{i+1:02d}` {s}" for i, s in enumerate(self.sub_packages))
-        coverage_val = "\n".join(f"`{i+1:02d}` {c}" for i, c in enumerate(self.coverages))
-        pressure_val = "\n".join(f"`{i+1:02d}` {p}" for i, p in enumerate(self.pressures))
+        formation_val = "\n".join(f"`{i+1:02d}` {f}" for i, f in enumerate(formations)) or "\u200b"
+        subs_val = "\n".join(f"`{i+1:02d}` {s}" for i, s in enumerate(sub_packages)) or "\u200b"
+        coverage_val = "\n".join(f"`{i+1:02d}` {c}" for i, c in enumerate(coverages)) or "\u200b"
+        pressure_val = "\n".join(f"`{i+1:02d}` {p}" for i, p in enumerate(pressures)) or "\u200b"
 
         embed = discord.Embed(title=f"{team_name} — Defensive Install", color=team_color)
         logo = team.get("logoDark") or team.get("logo")
@@ -157,45 +372,28 @@ class DefenseInstallConfirmView(discord.ui.View):
         embed.add_field(name="Pressure Packages", value=pressure_val, inline=True)
         embed.set_footer(text=f"Last updated: {submitted}")
 
-        for child in self.children:
-            child.disabled = True
-        await interaction.response.edit_message(content=None, embed=embed, view=self)
+        await interaction.edit_original_response(content=None, embed=embed, view=None)
         from cogs.scheduling import refresh_dashboard
         await refresh_dashboard(interaction.client)
 
-    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
-    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        for child in self.children:
-            child.disabled = True
-        await interaction.response.edit_message(content="Cancelled. Nothing was saved.", view=self)
+    async def _on_cancel(self, interaction: discord.Interaction):
+        if not await _guard_owner(interaction, self.abbr):
+            return
+        drafts = load_defense_install_drafts()
+        drafts.pop(self.abbr, None)
+        save_defense_install_drafts(drafts)
+        await interaction.response.edit_message(content="Cancelled. Nothing was saved.", view=None)
 
-
-# ---- Continue button (bridges modal → modal since Discord forbids modal → modal) ----
-
-class _ContinueView(discord.ui.View):
-    """Ephemeral 'Continue' button used between chained modals."""
-
-    def __init__(self, label: str, on_click):
-        super().__init__(timeout=300)
-        self._on_click = on_click
-        btn = discord.ui.Button(label=label, style=discord.ButtonStyle.primary)
-        btn.callback = self._handle
-        self.add_item(btn)
-
-    async def _handle(self, interaction: discord.Interaction):
-        # Disable the button via webhook edit (separate from interaction response)
-        # so it can't be clicked again while the modal is open.
-        for child in self.children:
-            child.disabled = True
-        try:
-            await interaction.message.edit(view=self)
-        except Exception:
-            pass
-        # Use the interaction response to open the next modal.
-        await self._on_click(interaction)
+    async def on_error(self, interaction: discord.Interaction, error: Exception, item: discord.ui.Item):
+        await _on_view_error(interaction, "PersistentDefenseConfirmView", error)
 
 
 # ---- Modals ----
+#
+# Each modal writes its batch straight into the shared draft on disk
+# before showing the next control, instead of passing state along only in
+# memory. The draft on disk is always the single source of truth for what
+# has been collected so far.
 
 class InstallDefenseModal1(discord.ui.Modal, title="Base Formations"):
     f01 = discord.ui.TextInput(label="01", placeholder="e.g. 4-3 Under", required=True, max_length=60)
@@ -213,15 +411,17 @@ class InstallDefenseModal1(discord.ui.Modal, title="Base Formations"):
             self.f01.value.strip(), self.f02.value.strip(),
             self.f03.value.strip(), self.f04.value.strip(), self.f05.value.strip(),
         ]
-        abbr = self.abbr
+        drafts = load_defense_install_drafts()
+        drafts[self.abbr] = {"formations": formations, "sub_packages": [], "data": {}}
+        save_defense_install_drafts(drafts)
 
-        async def on_continue(interaction: discord.Interaction):
-            await interaction.response.send_modal(InstallDefenseModal2(abbr, formations))
-
-        view = _ContinueView("Continue → Sub Packages 01–05", on_continue)
+        view = PersistentContinueView(self.abbr, target_modal=2)
         await interaction.response.send_message(
             "**Base Formations saved.** Click to continue:", view=view, ephemeral=True
         )
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception):
+        await _on_view_error(interaction, "InstallDefenseModal1", error)
 
 
 class InstallDefenseModal2(discord.ui.Modal, title="Sub Packages (1 of 2)"):
@@ -241,16 +441,20 @@ class InstallDefenseModal2(discord.ui.Modal, title="Sub Packages (1 of 2)"):
             self.s01.value.strip(), self.s02.value.strip(), self.s03.value.strip(),
             self.s04.value.strip(), self.s05.value.strip(),
         ]
-        abbr = self.abbr
-        formations = self.formations
+        drafts = load_defense_install_drafts()
+        draft = drafts.get(self.abbr) or {"formations": self.formations, "data": {}}
+        draft["formations"] = self.formations
+        draft["sub_packages"] = subs
+        drafts[self.abbr] = draft
+        save_defense_install_drafts(drafts)
 
-        async def on_continue(interaction: discord.Interaction):
-            await interaction.response.send_modal(InstallDefenseModal3(abbr, formations, subs))
-
-        view = _ContinueView("Continue → Sub Packages 06–08", on_continue)
+        view = PersistentContinueView(self.abbr, target_modal=3)
         await interaction.response.send_message(
             "**Sub Packages 01–05 saved.** Click to continue:", view=view, ephemeral=True
         )
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception):
+        await _on_view_error(interaction, "InstallDefenseModal2", error)
 
 
 class InstallDefenseModal3(discord.ui.Modal, title="Sub Packages (2 of 2)"):
@@ -284,67 +488,22 @@ class InstallDefenseModal3(discord.ui.Modal, title="Sub Packages (2 of 2)"):
             )
             return
 
-        wizard = DefenseCoveragePressureWizard(self.abbr, all_formations, all_subs)
-        await wizard.start(interaction)
+        await start_defense_steps(interaction, self.abbr, all_formations, all_subs)
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception):
+        await _on_view_error(interaction, "InstallDefenseModal3", error)
 
 
-class DefenseCoveragePressureWizard:
-    """Base Coverages → Pressure Packages, with Back support on the second step."""
+async def start_defense_steps(interaction: discord.Interaction, abbr: str, formations: list[str], sub_packages: list[str]):
+    """Creates the on-disk draft (overwriting any stale one for this abbr)
+    and shows step 0. From here on, all state lives on disk keyed by abbr,
+    not in a Python object — see PersistentDefenseStepView."""
+    drafts = load_defense_install_drafts()
+    drafts[abbr] = {"formations": formations, "sub_packages": sub_packages, "data": {}, "step_index": 0}
+    save_defense_install_drafts(drafts)
 
-    def __init__(self, abbr: str, formations: list[str], sub_packages: list[str]):
-        self.abbr = abbr
-        self.formations = formations
-        self.sub_packages = sub_packages
-        self.coverages: list[str] = []
-        self.pressures: list[str] = []
-        self.index = 0
-
-    async def start(self, interaction: discord.Interaction):
-        await self._show_coverages(interaction, first=True)
-
-    async def _show_coverages(self, interaction: discord.Interaction, first: bool = False):
-        view = DefenseMultiSelectView(
-            BASE_COVERAGES, BASE_COVERAGES_MAX_SELECT,
-            f"Select base coverages (up to {BASE_COVERAGES_MAX_SELECT})",
-            self._on_coverages,
-            preselected=self.coverages or None,
-        )
-        content = "**Defensive Install (3 of 4)** — Select your base coverages:"
-        if first:
-            await interaction.response.send_message(content, view=view, ephemeral=True)
-        else:
-            await interaction.response.edit_message(content=content, view=view)
-
-    async def _on_coverages(self, interaction: discord.Interaction, coverages: list[str]):
-        self.coverages = coverages
-        view = DefenseMultiSelectView(
-            PRESSURE_TYPES, PRESSURE_TYPES_MAX_SELECT,
-            f"Select pressure packages (up to {PRESSURE_TYPES_MAX_SELECT})",
-            self._on_pressures,
-            on_back=self._on_back,
-            preselected=self.pressures or None,
-        )
-        await interaction.response.edit_message(
-            content="**Defensive Install (4 of 4)** — Select your pressure packages:",
-            view=view,
-        )
-
-    async def _on_back(self, interaction: discord.Interaction):
-        await self._show_coverages(interaction)
-
-    async def _on_pressures(self, interaction: discord.Interaction, pressures: list[str]):
-        self.pressures = pressures
-        coverage_preview = "\n".join(f"• {c}" for c in self.coverages)
-        pressure_preview = "\n".join(f"• {p}" for p in pressures)
-        view = DefenseInstallConfirmView(self.abbr, self.formations, self.sub_packages, self.coverages, self.pressures)
-        await interaction.response.edit_message(
-            content=(
-                "**Defensive Install — review & save:**\n"
-                f"**Base Coverages:**\n{coverage_preview}\n\n"
-                f"**Pressure Packages:**\n{pressure_preview}"
-            ),
-            view=view,
-        )
+    view = PersistentDefenseStepView(abbr, 0)
+    await interaction.response.send_message(view.content_for(0), view=view, ephemeral=True)
 
 
 # ---- Cog ----
@@ -352,6 +511,27 @@ class DefenseCoveragePressureWizard:
 class InstallDefense(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+
+    def register_active_views(self):
+        """Re-registers a persistent view for every in-progress install
+        draft so its buttons keep working across a bot restart — whether
+        the draft was left mid-modal-chain, mid-select, or at final
+        review. Must be called once after the bot logs in, same as
+        install_offense.py's register_active_views()."""
+        drafts = load_defense_install_drafts()
+        for abbr, draft in drafts.items():
+            if "step_index" in draft:
+                step_index = draft.get("step_index", 0)
+                if isinstance(step_index, int) and 0 <= step_index < len(DEFENSE_STEPS):
+                    self.bot.add_view(PersistentDefenseStepView(abbr, step_index))
+                elif step_index == len(DEFENSE_STEPS):
+                    self.bot.add_view(PersistentDefenseConfirmView(abbr))
+            else:
+                # Mid-modal-chain: whether sub packages have been saved yet
+                # tells us which modal comes next.
+                sub_packages = draft.get("sub_packages", [])
+                target_modal = 3 if len(sub_packages) > 0 else 2
+                self.bot.add_view(PersistentContinueView(abbr, target_modal))
 
     @app_commands.command(
         name="install_defense",

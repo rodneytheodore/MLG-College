@@ -68,6 +68,15 @@ PASS_DEEP_MIN, PASS_DEEP_MAX = 2, 4
 
 
 # ---- Storage ----
+#
+# A single drafts file tracks the WHOLE flow now — both the 3-modal
+# formation chain and the 4 concept-select steps — not just the select
+# steps. Every step of the wizard writes its progress here before showing
+# the next control, and every control that can be clicked later (Continue
+# buttons and select-step buttons alike) is a persistent, custom_id-based
+# view read fresh from this file. That means a bot restart at ANY point in
+# the flow leaves a resumable, clickable control behind instead of a dead
+# one — see register_active_views() below.
 
 def load_offense_installs() -> dict:
     path = os.path.join(DATA_DIR, "offense_installs.json")
@@ -85,9 +94,6 @@ def save_offense_installs(data: dict):
 
 
 def load_offense_install_drafts() -> dict:
-    """In-progress /install_offense sessions, keyed by team abbr. Persisted
-    to disk (not just held in memory) so a bot restart mid-wizard doesn't
-    strand the user with dead buttons — see PersistentConceptStepView."""
     path = os.path.join(DATA_DIR, "offense_install_drafts.json")
     if not os.path.exists(path):
         return {}
@@ -102,15 +108,86 @@ def save_offense_install_drafts(data: dict):
         json.dump(data, f, indent=2)
 
 
-# ---- Persistent multi-select step view ----
+async def _guard_owner(interaction: discord.Interaction, abbr: str) -> bool:
+    roster = load_roster()
+    owner_id = (roster.get(abbr) or {}).get("user_id")
+    if owner_id != interaction.user.id:
+        await interaction.response.send_message(
+            "Only the team owner who started this install can use it. Run `/install_offense` yourself to start your own.",
+            ephemeral=True,
+        )
+        return False
+    return True
+
+
+async def _on_view_error(interaction: discord.Interaction, source: str, error: Exception, resume_cmd: str = "/install_offense"):
+    print(f"[install_offense] {source} error: {error!r}")
+    traceback.print_exc()
+    message = f"Something went wrong with that step. Please run `{resume_cmd}` again."
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(message, ephemeral=True)
+        else:
+            await interaction.response.send_message(message, ephemeral=True)
+    except discord.HTTPException:
+        pass
+
+
+# ---- Persistent "Continue" bridge between chained modals ----
 #
-# Unlike a plain discord.ui.View (which only lives in memory for the
-# process that created it), this view is registered with timeout=None and
-# stable custom_ids, and its state is read fresh from disk on every
-# interaction rather than from Python closures. That means it keeps working
-# even if the bot restarts between when a step is shown and when the user
-# clicks it — the exact scenario that caused silent "Interaction failed"
-# clicks with nothing in the logs.
+# Discord forbids opening a modal directly from a modal's on_submit, so a
+# button bridges each transition. Unlike the old version of this button,
+# this one is registered with timeout=None and a stable custom_id, and it
+# reads the accumulated formations from disk rather than from a Python
+# closure — so it keeps working even if the bot restarts while it's the
+# only thing on screen.
+
+CONTINUE_LABELS = {
+    2: "Continue → Formations 06–10",
+    3: "Continue → Formations 11–14 (optional)",
+}
+
+
+class PersistentContinueView(discord.ui.View):
+    def __init__(self, abbr: str, target_modal: int):
+        super().__init__(timeout=None)
+        self.abbr = abbr
+        self.target_modal = target_modal
+        btn = discord.ui.Button(
+            label=CONTINUE_LABELS[target_modal],
+            style=discord.ButtonStyle.primary,
+            custom_id=f"oi_continue:{abbr}:{target_modal}",
+        )
+        btn.callback = self._on_click
+        self.add_item(btn)
+
+    async def _on_click(self, interaction: discord.Interaction):
+        if not await _guard_owner(interaction, self.abbr):
+            return
+        drafts = load_offense_install_drafts()
+        draft = drafts.get(self.abbr)
+        if draft is None:
+            await interaction.response.send_message(
+                "This install session has expired. Run `/install_offense` again.", ephemeral=True
+            )
+            return
+        formations = draft.get("formations", [])
+        modal_cls = InstallOffenseModal2 if self.target_modal == 2 else InstallOffenseModal3
+        await interaction.response.send_modal(modal_cls(self.abbr, formations))
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception, item: discord.ui.Item):
+        await _on_view_error(interaction, "PersistentContinueView", error)
+
+
+# ---- Persistent multi-select step view ----
+
+CONCEPT_STEPS = [
+    ("run_concepts", CORE_RUN_CONCEPTS, CORE_RUN_MAX_SELECT, 1, "run concepts"),
+    ("quick_pass", PASS_QUICK_GAME, PASS_QUICK_MAX, PASS_QUICK_MIN, "quick pass concepts"),
+    ("intermediate_pass", PASS_INTERMEDIATE, PASS_INTERMEDIATE_MAX, PASS_INTERMEDIATE_MIN, "intermediate pass concepts"),
+    ("deep_pass", PASS_DEEP, PASS_DEEP_MAX, PASS_DEEP_MIN, "deep pass concepts"),
+]
+
 
 class PersistentConceptStepView(discord.ui.View):
     def __init__(self, abbr: str, step_index: int):
@@ -168,19 +245,8 @@ class PersistentConceptStepView(discord.ui.View):
             f"(step {step_index + 1}/{len(CONCEPT_STEPS)}, pick {min_select}-{max_select}, then confirm):"
         )
 
-    async def _guard_owner(self, interaction: discord.Interaction) -> bool:
-        roster = load_roster()
-        owner_id = (roster.get(self.abbr) or {}).get("user_id")
-        if owner_id != interaction.user.id:
-            await interaction.response.send_message(
-                "Only the team owner who started this install can use it. Run `/install_offense` yourself to start your own.",
-                ephemeral=True,
-            )
-            return False
-        return True
-
     async def _on_select(self, interaction: discord.Interaction):
-        if not await self._guard_owner(interaction):
+        if not await _guard_owner(interaction, self.abbr):
             return
         selected = self.select.values
         drafts = load_offense_install_drafts()
@@ -196,7 +262,7 @@ class PersistentConceptStepView(discord.ui.View):
         await interaction.response.edit_message(view=self)
 
     async def _on_confirm_click(self, interaction: discord.Interaction):
-        if not await self._guard_owner(interaction):
+        if not await _guard_owner(interaction, self.abbr):
             return
         drafts = load_offense_install_drafts()
         draft = drafts.get(self.abbr) or {}
@@ -222,7 +288,7 @@ class PersistentConceptStepView(discord.ui.View):
             await interaction.response.edit_message(content=view.content_for(next_index), view=view)
 
     async def _on_back(self, interaction: discord.Interaction):
-        if not await self._guard_owner(interaction):
+        if not await _guard_owner(interaction, self.abbr):
             return
         prev_index = self.step_index - 1
         drafts = load_offense_install_drafts()
@@ -235,69 +301,15 @@ class PersistentConceptStepView(discord.ui.View):
         await interaction.response.edit_message(content=view.content_for(prev_index), view=view)
 
     async def on_error(self, interaction: discord.Interaction, error: Exception, item: discord.ui.Item):
-        print(f"[install_offense] PersistentConceptStepView error on {item!r}: {error!r}")
-        traceback.print_exc()
-        message = "Something went wrong with that step. Please run `/install_offense` again."
-        try:
-            if interaction.response.is_done():
-                await interaction.followup.send(message, ephemeral=True)
-            else:
-                await interaction.response.send_message(message, ephemeral=True)
-        except discord.HTTPException:
-            pass
-
-
-# ---- Continue button (bridges modal → modal since Discord forbids modal → modal) ----
-
-class _ContinueView(discord.ui.View):
-    """Ephemeral 'Continue' button used between chained modals."""
-
-    def __init__(self, label: str, on_click):
-        super().__init__(timeout=300)
-        self._on_click = on_click
-        self.message: discord.Message | None = None
-        btn = discord.ui.Button(label=label, style=discord.ButtonStyle.primary)
-        btn.callback = self._handle
-        self.add_item(btn)
-
-    async def _handle(self, interaction: discord.Interaction):
-        # Disable the button via webhook edit (separate from interaction response)
-        # so it can't be clicked again while the modal is open.
-        for child in self.children:
-            child.disabled = True
-        try:
-            await interaction.message.edit(view=self)
-        except Exception:
-            pass
-        # Use the interaction response to open the next modal.
-        await self._on_click(interaction)
-
-    async def on_timeout(self):
-        for child in self.children:
-            child.disabled = True
-        if self.message is not None:
-            try:
-                await self.message.edit(
-                    content="⏱️ This install session timed out from inactivity. Run `/install_offense` again to pick back up.",
-                    view=self,
-                )
-            except discord.HTTPException:
-                pass
-
-    async def on_error(self, interaction: discord.Interaction, error: Exception, item: discord.ui.Item):
-        print(f"[install_offense] _ContinueView error on {item!r}: {error!r}")
-        traceback.print_exc()
-        message = "Something went wrong continuing that step. Please run `/install_offense` again."
-        try:
-            if interaction.response.is_done():
-                await interaction.followup.send(message, ephemeral=True)
-            else:
-                await interaction.response.send_message(message, ephemeral=True)
-        except discord.HTTPException:
-            pass
+        await _on_view_error(interaction, "PersistentConceptStepView", error)
 
 
 # ---- Modals ----
+#
+# Each modal now writes its batch straight into the shared draft on disk
+# before showing the next control, instead of passing state along only in
+# memory. The "formations" list on the draft is always the single source
+# of truth for what's been collected so far.
 
 class InstallOffenseModal1(discord.ui.Modal, title="Base Formations (1 of 3)"):
     f01 = discord.ui.TextInput(label="01", placeholder="e.g. Gun Bunch", required=True, max_length=60)
@@ -315,16 +327,17 @@ class InstallOffenseModal1(discord.ui.Modal, title="Base Formations (1 of 3)"):
             self.f01.value.strip(), self.f02.value.strip(), self.f03.value.strip(),
             self.f04.value.strip(), self.f05.value.strip(),
         ]
-        abbr = self.abbr
+        drafts = load_offense_install_drafts()
+        drafts[self.abbr] = {"formations": batch, "data": {}}
+        save_offense_install_drafts(drafts)
 
-        async def on_continue(interaction: discord.Interaction):
-            await interaction.response.send_modal(InstallOffenseModal2(abbr, batch))
-
-        view = _ContinueView("Continue → Formations 06–10", on_continue)
+        view = PersistentContinueView(self.abbr, target_modal=2)
         await interaction.response.send_message(
             "**Formations 01–05 saved.** Click to continue:", view=view, ephemeral=True
         )
-        view.message = await interaction.original_response()
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception):
+        await _on_view_error(interaction, "InstallOffenseModal1", error)
 
 
 class InstallOffenseModal2(discord.ui.Modal, title="Base Formations (2 of 3)"):
@@ -345,16 +358,19 @@ class InstallOffenseModal2(discord.ui.Modal, title="Base Formations (2 of 3)"):
             self.f09.value.strip(), self.f10.value.strip(),
         ]
         all_so_far = self.prev + batch
-        abbr = self.abbr
+        drafts = load_offense_install_drafts()
+        draft = drafts.get(self.abbr) or {"data": {}}
+        draft["formations"] = all_so_far
+        drafts[self.abbr] = draft
+        save_offense_install_drafts(drafts)
 
-        async def on_continue(interaction: discord.Interaction):
-            await interaction.response.send_modal(InstallOffenseModal3(abbr, all_so_far))
-
-        view = _ContinueView("Continue → Formations 11–14 (optional)", on_continue)
+        view = PersistentContinueView(self.abbr, target_modal=3)
         await interaction.response.send_message(
             "**Formations 06–10 saved.** Click to continue:", view=view, ephemeral=True
         )
-        view.message = await interaction.original_response()
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception):
+        await _on_view_error(interaction, "InstallOffenseModal2", error)
 
 
 class InstallOffenseModal3(discord.ui.Modal, title="Base Formations (3 of 3)"):
@@ -384,16 +400,10 @@ class InstallOffenseModal3(discord.ui.Modal, title="Base Formations (3 of 3)"):
             )
             return
 
-        abbr = self.abbr
-        await start_offense_concepts(interaction, abbr, all_formations)
+        await start_offense_concepts(interaction, self.abbr, all_formations)
 
-
-CONCEPT_STEPS = [
-    ("run_concepts", CORE_RUN_CONCEPTS, CORE_RUN_MAX_SELECT, 1, "run concepts"),
-    ("quick_pass", PASS_QUICK_GAME, PASS_QUICK_MAX, PASS_QUICK_MIN, "quick pass concepts"),
-    ("intermediate_pass", PASS_INTERMEDIATE, PASS_INTERMEDIATE_MAX, PASS_INTERMEDIATE_MIN, "intermediate pass concepts"),
-    ("deep_pass", PASS_DEEP, PASS_DEEP_MAX, PASS_DEEP_MIN, "deep pass concepts"),
-]
+    async def on_error(self, interaction: discord.Interaction, error: Exception):
+        await _on_view_error(interaction, "InstallOffenseModal3", error)
 
 
 async def start_offense_concepts(interaction: discord.Interaction, abbr: str, formations: list[str]):
@@ -455,13 +465,21 @@ class InstallOffense(commands.Cog):
 
     def register_active_views(self):
         """Re-registers a persistent view for every in-progress install
-        draft so its buttons keep working across a bot restart. Must be
+        draft so its buttons keep working across a bot restart — whether
+        the draft was left mid-modal-chain or mid-concept-select. Must be
         called once after the bot logs in, same as the other cogs' views."""
         drafts = load_offense_install_drafts()
         for abbr, draft in drafts.items():
-            step_index = draft.get("step_index", 0)
-            if 0 <= step_index < len(CONCEPT_STEPS):
-                self.bot.add_view(PersistentConceptStepView(abbr, step_index))
+            if "step_index" in draft:
+                step_index = draft.get("step_index", 0)
+                if 0 <= step_index < len(CONCEPT_STEPS):
+                    self.bot.add_view(PersistentConceptStepView(abbr, step_index))
+            else:
+                # Mid-modal-chain: however many formations are saved so far
+                # tells us which modal comes next.
+                formations = draft.get("formations", [])
+                target_modal = 3 if len(formations) >= 5 else 2
+                self.bot.add_view(PersistentContinueView(abbr, target_modal))
 
     @app_commands.command(
         name="install_offense",
