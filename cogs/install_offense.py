@@ -9,6 +9,7 @@ from discord.ext import commands
 
 from utils.data import load_roster, load_teams
 from utils.responses import send_ephemeral
+from cogs.scheduling import refresh_dashboard
 
 DATA_DIR = os.environ.get("DATA_DIR", "data").strip()
 
@@ -438,6 +439,7 @@ async def _save_and_show(interaction: discord.Interaction, abbr: str, data: dict
     embed.set_footer(text=f"Last updated: {submitted}")
 
     await interaction.response.edit_message(content=None, embed=embed, view=None)
+    await refresh_dashboard(interaction.client)
 
 
 # ---- Cog ----

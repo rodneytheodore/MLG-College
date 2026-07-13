@@ -17,6 +17,7 @@ from utils.data import (
     true_display_name,
 )
 from utils.responses import send_ephemeral
+from cogs.scheduling import refresh_dashboard
 
 
 # ---------- Option lists: (label, value) ----------
@@ -450,6 +451,7 @@ class OffenseWizard:
             view=None,
         )
         await self.cog.refresh_scheme_cards_channel()
+        await refresh_dashboard(self.cog.bot)
 
 
 # ---------- Defense wizard: Scheme -> Coverage Shell -> Coverage Type -> Pressure ----------
@@ -511,6 +513,7 @@ class DefenseWizard:
             view=None,
         )
         await self.cog.refresh_scheme_cards_channel()
+        await refresh_dashboard(self.cog.bot)
 
 
 # ---------- Initial detail modals (popup text fields, shown first) ----------
@@ -685,6 +688,7 @@ class SchemeCards(commands.Cog):
         await send_ephemeral(interaction, f"Cleared the {cleared} for **{self.teams[abbr]['name']}**.")
 
         await self.refresh_scheme_cards_channel()
+        await refresh_dashboard(self.bot)
 
     @clear_scheme_card.autocomplete("team")
     async def clear_scheme_card_team_autocomplete(self, interaction: discord.Interaction, current: str):

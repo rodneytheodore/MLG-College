@@ -8,6 +8,7 @@ from discord.ext import commands
 
 from utils.data import load_roster, load_teams
 from utils.responses import send_ephemeral
+from cogs.scheduling import refresh_dashboard
 
 DATA_DIR = os.environ.get("DATA_DIR", "data").strip()
 
@@ -157,6 +158,7 @@ class DefenseInstallConfirmView(discord.ui.View):
         for child in self.children:
             child.disabled = True
         await interaction.response.edit_message(content=None, embed=embed, view=self)
+        await refresh_dashboard(interaction.client)
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
