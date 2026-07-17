@@ -28,7 +28,7 @@ from utils.responses import send_ephemeral
 
 OFFENSE_SCHEME_OPTIONS = [(s, s) for s in [
     "Air Raid", "Spread", "Spread Option", "Option",
-    "Pro Style", "Power Spread", "Pistol", "Multiple",
+    "Pro Style", "Power Spread", "Pistol", "Multiple", "Run & Shoot",
 ]]
 OFFENSE_TEMPO_OPTIONS = [(t, t) for t in ["Hurry Up / No Huddle", "Controlled / Deliberate", "Mixed / Situational"]]
 RUN_PASS_OPTIONS = [(r, r) for r in ["Run Heavy (60%+ run)", "Balanced", "Pass Heavy (60%+ pass)"]]
@@ -700,6 +700,68 @@ class SchemeCards(commands.Cog):
     @clear_scheme_card.autocomplete("team")
     async def clear_scheme_card_team_autocomplete(self, interaction: discord.Interaction, current: str):
         return await self.team_autocomplete(interaction, current)
+
+    @app_commands.command(name="set_team_scheme", description="Directly correct a team's offense or defense Scheme (admin only)")
+    @app_commands.describe(team="Team to update", side="Offense or defense", scheme="New scheme value")
+    @app_commands.choices(side=[
+        app_commands.Choice(name="Offense", value="offense"),
+        app_commands.Choice(name="Defense", value="defense"),
+    ])
+    async def set_team_scheme(self, interaction: discord.Interaction, team: str, side: app_commands.Choice[str], scheme: str):
+        if not is_admin(interaction):
+            await send_ephemeral(interaction, "Only admins can update a team's scheme.")
+            return
+
+        abbr, error = resolve_team(team, self.teams)
+        if error:
+            await send_ephemeral(interaction, error)
+            return
+
+        options = OFFENSE_SCHEME_OPTIONS if side.value == "offense" else DEFENSE_SCHEME_OPTIONS
+        valid_values = {value for _, value in options}
+        if scheme not in valid_values:
+            await send_ephemeral(
+                interaction,
+                f"`{scheme}` isn't a valid {side.name.lower()} scheme option. "
+                f"Start typing to pick from the list.",
+            )
+            return
+
+        cards = load_scheme_cards()
+        card = cards.get(abbr)
+        if not card or not card.get(side.value):
+            await send_ephemeral(
+                interaction,
+                f"**{self.teams[abbr]['name']}** doesn't have a {side.name.lower()} scheme card set yet — "
+                f"use `/set_{side.value}_scheme` to create one first.",
+            )
+            return
+
+        card[side.value]["scheme"] = scheme
+        card["last_updated"] = datetime.now(timezone.utc).strftime("%B %d, %Y")
+        cards[abbr] = card
+        save_scheme_cards(cards)
+
+        await send_ephemeral(
+            interaction,
+            f"Updated **{self.teams[abbr]['name']}**'s {side.name.lower()} scheme to **{scheme}**.",
+        )
+
+        await self.refresh_scheme_cards_channel()
+        from cogs.scheduling import refresh_dashboard
+        await refresh_dashboard(self.bot)
+
+    @set_team_scheme.autocomplete("team")
+    async def set_team_scheme_team_autocomplete(self, interaction: discord.Interaction, current: str):
+        return await self.team_autocomplete(interaction, current)
+
+    @set_team_scheme.autocomplete("scheme")
+    async def set_team_scheme_scheme_autocomplete(self, interaction: discord.Interaction, current: str):
+        side_value = getattr(interaction.namespace, "side", None) or "offense"
+        options = OFFENSE_SCHEME_OPTIONS if side_value == "offense" else DEFENSE_SCHEME_OPTIONS
+        current_lower = (current or "").lower()
+        matches = [label for label, value in options if current_lower in value.lower()]
+        return [app_commands.Choice(name=m, value=m) for m in matches[:25]]
 
     @app_commands.command(name="post_scheme_cards", description="Set this channel as the live scheme cards display (admin only)")
     async def post_scheme_cards(self, interaction: discord.Interaction):
