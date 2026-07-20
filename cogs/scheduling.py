@@ -1689,7 +1689,19 @@ class Scheduling(commands.Cog):
         season = load_season()
         week = season.get("current_week")
         if not week:
-            await interaction.followup.send("No active week is set.", ephemeral=True)
+            # current_week only gets saved once _do_advance_week finishes without error.
+            # If the last /advance_week attempt crashed partway through (e.g. before the
+            # season/current_week save), current_week can still be unset even though a
+            # week's games were already staged and channels may already exist. Fall back
+            # to the highest-numbered staged week in that case.
+            staged_weeks = [int(k) for k, v in season.get("weeks", {}).items() if v.get("games")]
+            week = max(staged_weeks) if staged_weeks else None
+
+        if not week:
+            await interaction.followup.send(
+                "No active week is set and no staged week was found to recover. "
+                "Use `/add_game` to stage a week first.", ephemeral=True
+            )
             return
 
         week_key = str(week)
@@ -1808,6 +1820,8 @@ class Scheduling(commands.Cog):
         if cpu_channel:
             week_data["cpu_channel_id"] = cpu_channel.id
         season["weeks"][week_key] = week_data
+        # Restore current_week too, in case the crashed advance never got to save it.
+        season["current_week"] = week
         save_season(season)
         await refresh_dashboard(self.bot)
 
