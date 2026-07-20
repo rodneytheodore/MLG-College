@@ -28,7 +28,7 @@ from utils.responses import send_ephemeral
 
 OFFENSE_SCHEME_OPTIONS = [(s, s) for s in [
     "Air Raid", "Spread", "Spread Option", "Option",
-    "Pro Style", "Power Spread", "Pistol", "Multiple", "Run & Shoot",
+    "Pro Style", "Power Spread", "Pistol", "Multiple", "Run & Shoot", "Veer & Shoot",
 ]]
 OFFENSE_TEMPO_OPTIONS = [(t, t) for t in ["Hurry Up / No Huddle", "Controlled / Deliberate", "Mixed / Situational"]]
 RUN_PASS_OPTIONS = [(r, r) for r in ["Run Heavy (60%+ run)", "Balanced", "Pass Heavy (60%+ pass)"]]
