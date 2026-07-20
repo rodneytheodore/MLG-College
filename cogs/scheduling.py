@@ -18,6 +18,7 @@ from utils.data import (
     archive_dynasty,
     is_admin,
     resolve_team,
+    ADMIN_ROLE_NAME,
 )
 from utils.responses import send_ephemeral
 from utils.matchup_image import build_matchup_file
@@ -907,6 +908,14 @@ async def _do_advance_week(
         )
         return
 
+    # Save the deadlines right away, before any channel/thread creation. If something
+    # crashes partway through the loop below, the due date is still recoverable via
+    # /repost_week instead of being lost along with everything else that hadn't saved yet.
+    week_data["deadline"] = deadline
+    week_data["cpu_deadline"] = cpu_deadline
+    season["weeks"][week_key] = week_data
+    save_season(season)
+
     guild = interaction.guild
     roster = load_roster()
     cog = bot.get_cog("Scheduling")
@@ -923,6 +932,7 @@ async def _do_advance_week(
         return
 
     # User channel: everyone can view, only bot/admins can post; thread access granted per-game
+    admin_role = discord.utils.get(guild.roles, name=ADMIN_ROLE_NAME)
     user_overwrites = {
         guild.default_role: discord.PermissionOverwrite(
             view_channel=True,
@@ -937,6 +947,13 @@ async def _do_advance_week(
             manage_threads=True,
         ),
     }
+    if admin_role:
+        # Let @Admin post in every game thread, not just the two team owners.
+        user_overwrites[admin_role] = discord.PermissionOverwrite(
+            send_messages_in_threads=True,
+            use_application_commands=True,
+            manage_threads=True,
+        )
     user_channel = await guild.create_text_channel(
         f"week-{week}-user-games",
         category=scheduling_category,
@@ -1679,7 +1696,12 @@ class Scheduling(commands.Cog):
         name="repost_week",
         description="Recovery: repost the announcement and any missing game threads for the current week (admin only)",
     )
-    async def repost_week(self, interaction: discord.Interaction):
+    @app_commands.describe(
+        deadline="Optional: set/override the user games due date shown on the announcement "
+                 "(only needed if it wasn't saved before a crash — leave blank otherwise)",
+        cpu_deadline="Optional: set/override the CPU games due date shown on the announcement",
+    )
+    async def repost_week(self, interaction: discord.Interaction, deadline: str = None, cpu_deadline: str = None):
         if not is_admin(interaction):
             await send_ephemeral(interaction, "Only admins can repost the week.")
             return
@@ -1725,11 +1747,19 @@ class Scheduling(commands.Cog):
 
         user_games = [g for g in week_data["games"] if g["type"] == "user"]
         cpu_games = [g for g in week_data["games"] if g["type"] == "cpu"]
-        deadline = week_data.get("deadline")
-        cpu_deadline = week_data.get("cpu_deadline")
+        # Use whatever was already saved, but let the admin override/backfill it —
+        # weeks that crashed under an older build may never have had a deadline saved.
+        deadline = deadline or week_data.get("deadline")
+        cpu_deadline = cpu_deadline or week_data.get("cpu_deadline")
+        if deadline != week_data.get("deadline") or cpu_deadline != week_data.get("cpu_deadline"):
+            week_data["deadline"] = deadline
+            week_data["cpu_deadline"] = cpu_deadline
+            season["weeks"][week_key] = week_data
+            save_season(season)
         deadline_line = f"\n**Due:** {deadline}" if deadline else ""
 
         # --- Locate or create the week's channels (reuse existing ones instead of duplicating) ---
+        admin_role = discord.utils.get(guild.roles, name=ADMIN_ROLE_NAME)
         user_channel = None
         if week_data.get("user_channel_id"):
             user_channel = guild.get_channel(week_data["user_channel_id"])
@@ -1746,8 +1776,20 @@ class Scheduling(commands.Cog):
                     manage_messages=True, manage_threads=True,
                 ),
             }
+            if admin_role:
+                user_overwrites[admin_role] = discord.PermissionOverwrite(
+                    send_messages_in_threads=True, use_application_commands=True, manage_threads=True,
+                )
             user_channel = await guild.create_text_channel(
                 f"week-{week}-user-games", category=scheduling_category, overwrites=user_overwrites,
+            )
+
+        if user_channel is not None and admin_role:
+            # Backfill the Admin overwrite on channels that already existed before this
+            # feature was added (found by ID or by name above), so a re-run of this
+            # command still grants @Admin thread-posting rights.
+            await user_channel.set_permissions(
+                admin_role, send_messages_in_threads=True, use_application_commands=True, manage_threads=True,
             )
 
         cpu_channel = None
@@ -1799,19 +1841,29 @@ class Scheduling(commands.Cog):
                 allowed_mentions=discord.AllowedMentions(users=True),
             )
 
+            # Record + save immediately once the thread itself exists, so a failure in the
+            # (non-critical) scheme card embed step below can't cause this thread to be
+            # recreated as a duplicate on a retry.
+            g["thread_id"] = thread.id
+            g["message_id"] = game_msg.id
+            created_threads += 1
+            week_data["status"] = "active"
+            season["weeks"][week_key] = week_data
+            season["current_week"] = week
+            save_season(season)
+
             if scheme_cards_cog is not None:
                 all_cards = load_scheme_cards()
                 for team_abbr in (g["home"], g["away"]):
                     team_card = all_cards.get(team_abbr)
                     if not team_card or (not team_card.get("offense") and not team_card.get("defense")):
                         continue
-                    card_embed = build_compact_scheme_card_embed(scheme_cards_cog.teams[team_abbr], team_card)
-                    card_view = ExpandSchemeCardView(abbr=team_abbr)
-                    await thread.send(embed=card_embed, view=card_view, allowed_mentions=discord.AllowedMentions.none())
-
-            g["thread_id"] = thread.id
-            g["message_id"] = game_msg.id
-            created_threads += 1
+                    try:
+                        card_embed = build_compact_scheme_card_embed(scheme_cards_cog.teams[team_abbr], team_card)
+                        card_view = ExpandSchemeCardView(abbr=team_abbr)
+                        await thread.send(embed=card_embed, view=card_view, allowed_mentions=discord.AllowedMentions.none())
+                    except Exception as e:
+                        print(f"[repost_week] Failed to post scheme card for {team_abbr} in thread {thread.id}: {e}")
 
         # --- Persist any channel/thread IDs we just filled in ---
         week_data["status"] = "active"
@@ -1852,6 +1904,8 @@ class Scheduling(commands.Cog):
         summary = [
             f"✅ Repost complete for **Week {week}**.",
             f"- Announcement: {'posted' if reposted_announcement else 'already posted — skipped'}",
+            f"- User games due: {deadline or '*(none set)*'}",
+            f"- CPU games due: {cpu_deadline or '*(none set)*'}",
             f"- New game threads created: {created_threads}",
             f"- New CPU game posts created: {posted_cpu}",
         ]
