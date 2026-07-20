@@ -1,3 +1,5 @@
+import json
+import os
 from datetime import datetime, timezone
 
 import discord
@@ -53,6 +55,7 @@ from cogs.install_offense import (
     PASS_QUICK_GAME, PASS_QUICK_MIN, PASS_QUICK_MAX,
     PASS_INTERMEDIATE, PASS_INTERMEDIATE_MIN, PASS_INTERMEDIATE_MAX,
     PASS_DEEP, PASS_DEEP_MIN, PASS_DEEP_MAX,
+    DATA_DIR,
 )
 
 DEFENSE_SCHEME_OPTIONS = [(s, s) for s in [
@@ -281,18 +284,110 @@ def build_step_prompt(step_names: list[str], index: int, label: str) -> str:
     return text
 
 
-# ---------- Generic single-select dropdown step ----------
+# ---------- Persisted wizard drafts ----------
+#
+# The Set Offense/Defense Scheme wizards used to hold all progress in a
+# plain Python object (OffenseWizard/DefenseWizard) tied to a timeout=180
+# view. That meant a bot restart -- or just clicking "Confirm Selection"
+# after the process had restarted for any other reason -- left a dead
+# button with nothing server-side to catch the click, producing Discord's
+# generic "didn't respond in time" error. This mirrors the same fix
+# already applied to /install_offense and /install_defense: every step
+# writes its progress to disk before showing the next control, and every
+# control is a persistent (timeout=None), custom_id-based view read fresh
+# from disk -- so a restart at any point leaves a resumable, clickable
+# control instead of a dead one. See SchemeCards.register_active_views().
 
-class ChoiceStepView(discord.ui.View):
-    """A select menu where picking one option advances the wizard."""
+def load_scheme_card_drafts() -> dict:
+    path = os.path.join(DATA_DIR, "scheme_card_drafts.json")
+    if not os.path.exists(path):
+        return {}
+    with open(path) as f:
+        return json.load(f)
 
-    def __init__(self, choices: list[tuple[str, str]], placeholder: str, on_pick,
-                 on_back=None, selected_value: str | None = None):
-        super().__init__(timeout=180)
-        self.on_pick = on_pick
 
-        select = discord.ui.Select(
-            placeholder=placeholder,
+def save_scheme_card_drafts(data: dict):
+    os.makedirs(DATA_DIR, exist_ok=True)
+    path = os.path.join(DATA_DIR, "scheme_card_drafts.json")
+    with open(path, "w") as f:
+        json.dump(data, f, indent=2)
+
+
+def _draft_key(kind: str, abbr: str) -> str:
+    # Composite key so a team owner can have an in-progress offense draft
+    # and an in-progress defense draft at the same time without colliding.
+    return f"{abbr}:{kind}"
+
+
+def _steps_for(kind: str) -> list:
+    return OffenseWizardSteps if kind == "offense" else DefenseWizardSteps
+
+
+def _step_names_for(kind: str) -> list:
+    return OFFENSE_STEP_NAMES if kind == "offense" else DEFENSE_STEP_NAMES
+
+
+async def _guard_scheme_owner(interaction: discord.Interaction, abbr: str) -> bool:
+    roster = load_roster()
+    owner_id = (roster.get(abbr) or {}).get("user_id")
+    if owner_id != interaction.user.id:
+        await interaction.response.send_message(
+            "Only the team owner who started this can use it. Run the command yourself to start your own.",
+            ephemeral=True,
+        )
+        return False
+    return True
+
+
+async def _on_scheme_view_error(interaction: discord.Interaction, source: str, error: Exception, resume_cmd: str):
+    import traceback
+    print(f"[scheme_cards] {source} error: {error!r}")
+    traceback.print_exc()
+    message = f"Something went wrong with that step. Please run `{resume_cmd}` again."
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(message, ephemeral=True)
+        else:
+            await interaction.response.send_message(message, ephemeral=True)
+    except discord.HTTPException:
+        pass
+
+
+OffenseWizardSteps = [
+    ("scheme", OFFENSE_SCHEME_OPTIONS),
+    ("tempo", OFFENSE_TEMPO_OPTIONS),
+    ("run_pass", RUN_PASS_OPTIONS),
+    ("playbook_type", PLAYBOOK_TYPE_OPTIONS),
+]
+DefenseWizardSteps = [
+    ("scheme", DEFENSE_SCHEME_OPTIONS),
+    ("coverage_shell", COVERAGE_SHELL_OPTIONS),
+    ("coverage_type", COVERAGE_TYPE_OPTIONS),
+]
+
+
+# ---------- Generic single-select dropdown step (persistent, disk-backed) ----------
+
+class PersistentSchemeChoiceStepView(discord.ui.View):
+    """A select menu where picking one option advances the wizard. Persistent
+    (timeout=None) and reads/writes its progress from scheme_card_drafts.json
+    so it keeps working across a bot restart."""
+
+    def __init__(self, kind: str, abbr: str, step_index: int):
+        super().__init__(timeout=None)
+        self.kind = kind
+        self.abbr = abbr
+        self.step_index = step_index
+        field_key, choices = _steps_for(kind)[step_index]
+        step_name = _step_names_for(kind)[step_index]
+
+        drafts = load_scheme_card_drafts()
+        draft = drafts.get(_draft_key(kind, abbr)) or {}
+        selected_value = draft.get("data", {}).get(field_key)
+
+        self.select = discord.ui.Select(
+            custom_id=f"sc_select:{kind}:{abbr}:{step_index}",
+            placeholder=f"Select your {step_name.lower()}...",
             min_values=1,
             max_values=1,
             options=[
@@ -300,226 +395,221 @@ class ChoiceStepView(discord.ui.View):
                 for label, value in choices
             ],
         )
-        select.callback = self._make_callback(select)
-        self.add_item(select)
+        self.select.callback = self._on_select
+        self.add_item(self.select)
 
-        if on_back is not None:
-            back_btn = discord.ui.Button(label="← Back", style=discord.ButtonStyle.secondary)
-            back_btn.callback = on_back
+        if step_index > 0:
+            back_btn = discord.ui.Button(
+                label="← Back", style=discord.ButtonStyle.secondary,
+                custom_id=f"sc_back:{kind}:{abbr}:{step_index}",
+            )
+            back_btn.callback = self._on_back
             self.add_item(back_btn)
 
-    def _make_callback(self, select: discord.ui.Select):
-        async def callback(interaction: discord.Interaction):
-            await self.on_pick(interaction, select.values[0])
-        return callback
+    @staticmethod
+    def content_for(kind: str, step_index: int) -> str:
+        step_names = _step_names_for(kind)
+        return build_step_prompt(step_names, step_index, step_names[step_index])
+
+    async def _on_select(self, interaction: discord.Interaction):
+        if not await _guard_scheme_owner(interaction, self.abbr):
+            return
+        value = self.select.values[0]
+        key = _draft_key(self.kind, self.abbr)
+        drafts = load_scheme_card_drafts()
+        draft = drafts.setdefault(key, {"kind": self.kind, "data": {}, "step_index": self.step_index})
+        field_key = _steps_for(self.kind)[self.step_index][0]
+        draft["data"][field_key] = value
+        next_index = self.step_index + 1
+        draft["step_index"] = next_index
+        drafts[key] = draft
+        save_scheme_card_drafts(drafts)
+
+        steps = _steps_for(self.kind)
+        if next_index < len(steps):
+            view = PersistentSchemeChoiceStepView(self.kind, self.abbr, next_index)
+            await interaction.response.edit_message(content=view.content_for(self.kind, next_index), view=view)
+        elif self.kind == "offense":
+            view = PersistentPersonnelStepView(self.abbr)
+            await interaction.response.edit_message(content=view.content_for(), view=view)
+        else:
+            await _save_defense(interaction, self.abbr)
+
+    async def _on_back(self, interaction: discord.Interaction):
+        if not await _guard_scheme_owner(interaction, self.abbr):
+            return
+        prev_index = self.step_index - 1
+        key = _draft_key(self.kind, self.abbr)
+        drafts = load_scheme_card_drafts()
+        draft = drafts.get(key)
+        if draft is not None:
+            draft["step_index"] = prev_index
+            drafts[key] = draft
+            save_scheme_card_drafts(drafts)
+        view = PersistentSchemeChoiceStepView(self.kind, self.abbr, prev_index)
+        await interaction.response.edit_message(content=view.content_for(self.kind, prev_index), view=view)
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception, item: discord.ui.Item):
+        resume_cmd = "/set_offense_scheme" if self.kind == "offense" else "/set_defense_scheme"
+        await _on_scheme_view_error(interaction, "PersistentSchemeChoiceStepView", error, resume_cmd)
 
 
-# ---------- Personnel groupings: multi-select dropdown, max 3 ----------
+# ---------- Personnel groupings: multi-select dropdown, max 3 (offense only, final step) ----------
 
-class MultiSelectStepView(discord.ui.View):
-    """A capped multi-select dropdown. Confirming calls on_confirm with the
-    sorted list of selected values — used for both Personnel Groupings and
-    Core Run Concepts, chained one after another."""
+class PersistentPersonnelStepView(discord.ui.View):
+    """The offense wizard's final step. Persistent and disk-backed, same as
+    PersistentSchemeChoiceStepView above."""
 
-    def __init__(self, options: list[tuple[str, str]], max_select: int, label: str, on_confirm,
-                 min_select: int = 1, on_back=None, preselected: list[str] | None = None):
-        super().__init__(timeout=120)
-        self.values_order = [value for _, value in options]
-        self.on_confirm = on_confirm
-        self.min_select = min_select
-        self.selected: list[str] = list(preselected) if preselected else []
+    def __init__(self, abbr: str):
+        super().__init__(timeout=None)
+        self.abbr = abbr
+        self.values_order = [value for _, value in PERSONNEL_GROUPINGS]
 
-        preselected_set = set(preselected or [])
+        drafts = load_scheme_card_drafts()
+        draft = drafts.get(_draft_key("offense", abbr)) or {}
+        preselected = draft.get("personnel_selected") or []
+        preselected_set = set(preselected)
+
         self.select = discord.ui.Select(
-            placeholder=f"Select {min_select}-{max_select} {label.lower()}...",
-            min_values=min_select,
-            max_values=min(max_select, len(options)),
+            custom_id=f"sc_personnel_select:{abbr}",
+            placeholder=f"Select 1-{PERSONNEL_MAX_SELECT} personnel groupings...",
+            min_values=1,
+            max_values=min(PERSONNEL_MAX_SELECT, len(PERSONNEL_GROUPINGS)),
             options=[
                 discord.SelectOption(label=lbl[:100], value=val[:100], default=val in preselected_set)
-                for lbl, val in options
+                for lbl, val in PERSONNEL_GROUPINGS
             ],
         )
         self.select.callback = self._on_select
         self.add_item(self.select)
 
-        if self.selected:
-            ordered = sorted(self.selected, key=self.values_order.index)
+        if preselected:
+            ordered = sorted(preselected, key=self.values_order.index)
             preview = ", ".join(ordered)
             self.select.placeholder = preview[:92] + "..." if len(preview) > 95 else preview
 
-        if on_back is not None:
-            back_btn = discord.ui.Button(label="← Back", style=discord.ButtonStyle.secondary)
-            back_btn.callback = on_back
-            self.add_item(back_btn)
+        back_btn = discord.ui.Button(
+            label="← Back", style=discord.ButtonStyle.secondary,
+            custom_id=f"sc_personnel_back:{abbr}",
+        )
+        back_btn.callback = self._on_back
+        self.add_item(back_btn)
 
-        confirm_btn = discord.ui.Button(label="Confirm Selection", style=discord.ButtonStyle.success)
+        confirm_btn = discord.ui.Button(
+            label="Confirm Selection", style=discord.ButtonStyle.success,
+            custom_id=f"sc_personnel_confirm:{abbr}",
+        )
         confirm_btn.callback = self._on_confirm_click
         self.add_item(confirm_btn)
 
+    @staticmethod
+    def content_for() -> str:
+        return (
+            f"**(Part 2 of 2) Step 5/9 — Select your primary personnel groupings** "
+            f"(up to {PERSONNEL_MAX_SELECT}, then confirm):"
+        )
+
     async def _on_select(self, interaction: discord.Interaction):
-        self.selected = self.select.values
-        self.select.placeholder = f"{len(self.selected)} selected"
+        if not await _guard_scheme_owner(interaction, self.abbr):
+            return
+        selected = self.select.values
+        key = _draft_key("offense", self.abbr)
+        drafts = load_scheme_card_drafts()
+        draft = drafts.setdefault(key, {"kind": "offense", "data": {}, "step_index": len(OffenseWizardSteps)})
+        draft["personnel_selected"] = selected
+        drafts[key] = draft
+        save_scheme_card_drafts(drafts)
+
+        ordered = sorted(selected, key=self.values_order.index)
+        preview = ", ".join(ordered)
+        self.select.placeholder = preview[:92] + "..." if len(preview) > 95 else preview
         await interaction.response.edit_message(view=self)
 
     async def _on_confirm_click(self, interaction: discord.Interaction):
-        if len(self.selected) < self.min_select:
-            await interaction.response.send_message(
-                f"Select at least {self.min_select} option(s) first.", ephemeral=True
-            )
+        if not await _guard_scheme_owner(interaction, self.abbr):
             return
-
-        ordered = sorted(self.selected, key=self.values_order.index)
-        for child in self.children:
-            child.disabled = True
-        await self.on_confirm(interaction, ordered)
-
-
-# ---------- Offense wizard: Scheme -> Tempo -> Playbook Type -> Personnel ----------
-
-class OffenseWizard:
-    STEPS = [
-        ("scheme", OFFENSE_SCHEME_OPTIONS),
-        ("tempo", OFFENSE_TEMPO_OPTIONS),
-        ("run_pass", RUN_PASS_OPTIONS),
-        ("playbook_type", PLAYBOOK_TYPE_OPTIONS),
-    ]
-
-    def __init__(self, cog: "SchemeCards", abbr: str, base_data: dict):
-        self.cog = cog
-        self.abbr = abbr
-        self.data = base_data
-        self.step_index = 0
-        self.personnel_selected: list[str] | None = None
-
-    async def start(self, interaction: discord.Interaction):
-        await self._show_step(interaction, first=True)
-
-    async def _show_step(self, interaction: discord.Interaction, first: bool = False):
-        field_key, choices = self.STEPS[self.step_index]
-        step_name = OFFENSE_STEP_NAMES[self.step_index]
-        prompt = build_step_prompt(OFFENSE_STEP_NAMES, self.step_index, step_name)
-        view = ChoiceStepView(
-            choices, f"Select your {step_name.lower()}...", self._on_pick,
-            on_back=self._on_back if self.step_index > 0 else None,
-            selected_value=self.data.get(field_key),
-        )
-        if first:
-            await interaction.response.send_message(prompt, view=view, ephemeral=True)
-        else:
-            await interaction.response.edit_message(content=prompt, view=view)
-
-    async def _on_pick(self, interaction: discord.Interaction, value: str):
-        field_key = self.STEPS[self.step_index][0]
-        self.data[field_key] = value
-        self.step_index += 1
-
-        if self.step_index < len(self.STEPS):
-            await self._show_step(interaction)
-        else:
-            await self._show_personnel_step(interaction)
+        drafts = load_scheme_card_drafts()
+        draft = drafts.get(_draft_key("offense", self.abbr)) or {}
+        selected = draft.get("personnel_selected") or []
+        if not selected:
+            await interaction.response.send_message("Select at least 1 option first.", ephemeral=True)
+            return
+        await _save_offense(interaction, self.abbr, draft)
 
     async def _on_back(self, interaction: discord.Interaction):
-        self.step_index -= 1
-        await self._show_step(interaction)
+        if not await _guard_scheme_owner(interaction, self.abbr):
+            return
+        prev_index = len(OffenseWizardSteps) - 1
+        key = _draft_key("offense", self.abbr)
+        drafts = load_scheme_card_drafts()
+        draft = drafts.get(key)
+        if draft is not None:
+            draft["step_index"] = prev_index
+            drafts[key] = draft
+            save_scheme_card_drafts(drafts)
+        view = PersistentSchemeChoiceStepView("offense", self.abbr, prev_index)
+        await interaction.response.edit_message(content=view.content_for("offense", prev_index), view=view)
 
-    async def _show_personnel_step(self, interaction: discord.Interaction):
-        view = MultiSelectStepView(
-            PERSONNEL_GROUPINGS, PERSONNEL_MAX_SELECT, "personnel groupings",
-            self._after_personnel,
-            on_back=self._on_back_from_personnel,
-            preselected=self.personnel_selected,
-        )
-        await interaction.response.edit_message(
-            content=f"**(Part 2 of 2) Step 5/9 — Select your primary personnel groupings** "
-            f"(up to {PERSONNEL_MAX_SELECT}, then confirm):",
-            view=view,
-        )
-
-    async def _on_back_from_personnel(self, interaction: discord.Interaction):
-        self.step_index = len(self.STEPS) - 1
-        await self._show_step(interaction)
-
-    async def _after_personnel(self, interaction: discord.Interaction, selected: list[str]):
-        self.personnel_selected = selected
-        self.data["personnel"] = ", ".join(selected)
-
-        cards = load_scheme_cards()
-        card = cards.setdefault(self.abbr, {})
-        card["offense"] = self.data
-        card["submitted_by"] = true_display_name(interaction.user)
-        card["last_updated"] = datetime.now(timezone.utc).strftime("%B %d, %Y")
-        save_scheme_cards(cards)
-
-        await interaction.response.edit_message(
-            content=f"\u2705 Offense scheme saved for **{self.cog.teams[self.abbr]['name']}**.",
-            view=None,
-        )
-        await self.cog.refresh_scheme_cards_channel()
-        from cogs.scheduling import refresh_dashboard
-        await refresh_dashboard(self.cog.bot)
+    async def on_error(self, interaction: discord.Interaction, error: Exception, item: discord.ui.Item):
+        await _on_scheme_view_error(interaction, "PersistentPersonnelStepView", error, "/set_offense_scheme")
 
 
-# ---------- Defense wizard: Scheme -> Coverage Shell -> Coverage Type -> Pressure ----------
+async def _save_offense(interaction: discord.Interaction, abbr: str, draft: dict):
+    selected = draft.get("personnel_selected") or []
+    data = dict(draft.get("data", {}))
+    data["personnel"] = ", ".join(selected)
 
-class DefenseWizard:
-    STEPS = [
-        ("scheme", DEFENSE_SCHEME_OPTIONS),
-        ("coverage_shell", COVERAGE_SHELL_OPTIONS),
-        ("coverage_type", COVERAGE_TYPE_OPTIONS),
-    ]
+    cards = load_scheme_cards()
+    card = cards.setdefault(abbr, {})
+    card["offense"] = data
+    card["submitted_by"] = true_display_name(interaction.user)
+    card["last_updated"] = datetime.now(timezone.utc).strftime("%B %d, %Y")
+    save_scheme_cards(cards)
 
-    def __init__(self, cog: "SchemeCards", abbr: str, base_data: dict):
-        self.cog = cog
-        self.abbr = abbr
-        self.data = base_data
-        self.step_index = 0
+    drafts = load_scheme_card_drafts()
+    drafts.pop(_draft_key("offense", abbr), None)
+    save_scheme_card_drafts(drafts)
 
-    async def start(self, interaction: discord.Interaction):
-        await self._show_step(interaction, first=True)
+    teams = load_teams()
+    team_name = teams.get(abbr, {}).get("name", abbr)
+    await interaction.response.edit_message(
+        content=f"✅ Offense scheme saved for **{team_name}**.", view=None,
+    )
 
-    async def _show_step(self, interaction: discord.Interaction, first: bool = False):
-        field_key, choices = self.STEPS[self.step_index]
-        step_name = DEFENSE_STEP_NAMES[self.step_index]
-        prompt = build_step_prompt(DEFENSE_STEP_NAMES, self.step_index, step_name)
-        view = ChoiceStepView(
-            choices, f"Select your {step_name.lower()}...", self._on_pick,
-            on_back=self._on_back if self.step_index > 0 else None,
-            selected_value=self.data.get(field_key),
-        )
-        if first:
-            await interaction.response.send_message(prompt, view=view, ephemeral=True)
-        else:
-            await interaction.response.edit_message(content=prompt, view=view)
+    cog = interaction.client.get_cog("SchemeCards")
+    if cog is not None:
+        await cog.refresh_scheme_cards_channel()
+    from cogs.scheduling import refresh_dashboard
+    await refresh_dashboard(interaction.client)
 
-    async def _on_pick(self, interaction: discord.Interaction, value: str):
-        field_key = self.STEPS[self.step_index][0]
-        self.data[field_key] = value
-        self.step_index += 1
 
-        if self.step_index < len(self.STEPS):
-            await self._show_step(interaction)
-        else:
-            await self._save(interaction)
+async def _save_defense(interaction: discord.Interaction, abbr: str):
+    key = _draft_key("defense", abbr)
+    drafts = load_scheme_card_drafts()
+    draft = drafts.get(key) or {}
+    data = dict(draft.get("data", {}))
 
-    async def _on_back(self, interaction: discord.Interaction):
-        self.step_index -= 1
-        await self._show_step(interaction)
+    cards = load_scheme_cards()
+    card = cards.setdefault(abbr, {})
+    card["defense"] = data
+    card["submitted_by"] = true_display_name(interaction.user)
+    card["last_updated"] = datetime.now(timezone.utc).strftime("%B %d, %Y")
+    save_scheme_cards(cards)
 
-    async def _save(self, interaction: discord.Interaction):
-        cards = load_scheme_cards()
-        card = cards.setdefault(self.abbr, {})
-        card["defense"] = self.data
-        card["submitted_by"] = true_display_name(interaction.user)
-        card["last_updated"] = datetime.now(timezone.utc).strftime("%B %d, %Y")
-        save_scheme_cards(cards)
+    drafts.pop(key, None)
+    save_scheme_card_drafts(drafts)
 
-        await interaction.response.edit_message(
-            content=f"\u2705 Defense scheme saved for **{self.cog.teams[self.abbr]['name']}**.",
-            view=None,
-        )
-        await self.cog.refresh_scheme_cards_channel()
-        from cogs.scheduling import refresh_dashboard
-        await refresh_dashboard(self.cog.bot)
+    teams = load_teams()
+    team_name = teams.get(abbr, {}).get("name", abbr)
+    await interaction.response.edit_message(
+        content=f"✅ Defense scheme saved for **{team_name}**.", view=None,
+    )
+
+    cog = interaction.client.get_cog("SchemeCards")
+    if cog is not None:
+        await cog.refresh_scheme_cards_channel()
+    from cogs.scheduling import refresh_dashboard
+    await refresh_dashboard(interaction.client)
 
 
 # ---------- Initial detail modals (popup text fields, shown first) ----------
@@ -543,8 +633,18 @@ class OffenseDetailsModal(discord.ui.Modal, title="Offense Details (Part 1 of 2)
             "summary": str(self.summary),
             "film": str(self.film),
         }
-        wizard = OffenseWizard(cog=self.cog, abbr=self.abbr, base_data=base_data)
-        await wizard.start(interaction)
+        key = _draft_key("offense", self.abbr)
+        drafts = load_scheme_card_drafts()
+        drafts[key] = {"kind": "offense", "data": base_data, "step_index": 0}
+        save_scheme_card_drafts(drafts)
+
+        view = PersistentSchemeChoiceStepView("offense", self.abbr, 0)
+        await interaction.response.send_message(
+            view.content_for("offense", 0), view=view, ephemeral=True
+        )
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception):
+        await _on_scheme_view_error(interaction, "OffenseDetailsModal", error, "/set_offense_scheme")
 
 
 class DefenseDetailsModal(discord.ui.Modal, title="Defense Details (Part 1 of 2)"):
@@ -558,8 +658,19 @@ class DefenseDetailsModal(discord.ui.Modal, title="Defense Details (Part 1 of 2)
 
     async def on_submit(self, interaction: discord.Interaction):
         base_data = {"coaching_tree": str(self.coaching_tree), "summary": str(self.summary)}
-        wizard = DefenseWizard(cog=self.cog, abbr=self.abbr, base_data=base_data)
-        await wizard.start(interaction)
+        key = _draft_key("defense", self.abbr)
+        drafts = load_scheme_card_drafts()
+        drafts[key] = {"kind": "defense", "data": base_data, "step_index": 0}
+        save_scheme_card_drafts(drafts)
+
+        view = PersistentSchemeChoiceStepView("defense", self.abbr, 0)
+        await interaction.response.send_message(
+            view.content_for("defense", 0), view=view, ephemeral=True
+        )
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception):
+        await _on_scheme_view_error(interaction, "DefenseDetailsModal", error, "/set_defense_scheme")
+
 
 
 class SchemeCards(commands.Cog):
@@ -571,8 +682,10 @@ class SchemeCards(commands.Cog):
 
     def register_active_views(self):
         """Re-registers persistent ExpandSchemeCardView buttons for every team
-        with a saved card. Must be called once after the bot logs in, since
-        persistent views don't survive a restart on their own."""
+        with a saved card, PLUS a persistent step view for every in-progress
+        /set_offense_scheme or /set_defense_scheme wizard. Must be called
+        once after the bot logs in, since persistent views don't survive a
+        restart on their own."""
         cards = load_scheme_cards()
         for abbr, card in cards.items():
             if not card.get("offense") or not card.get("defense"):
@@ -581,6 +694,18 @@ class SchemeCards(commands.Cog):
                 continue
             view = ExpandSchemeCardView(abbr=abbr)
             self.bot.add_view(view)
+
+        drafts = load_scheme_card_drafts()
+        for draft_key, draft in drafts.items():
+            abbr, _, kind = draft_key.rpartition(":")
+            if kind not in ("offense", "defense"):
+                continue
+            step_index = draft.get("step_index", 0)
+            steps = _steps_for(kind)
+            if step_index < len(steps):
+                self.bot.add_view(PersistentSchemeChoiceStepView(kind, abbr, step_index))
+            elif kind == "offense":
+                self.bot.add_view(PersistentPersonnelStepView(abbr))
 
     async def team_autocomplete(self, interaction: discord.Interaction, current: str):
         current_lower = current.lower()
