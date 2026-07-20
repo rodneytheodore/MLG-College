@@ -1204,6 +1204,35 @@ async def _load_authorized_game(interaction: discord.Interaction, game_id: str):
     return season, week, game, roster
 
 
+async def _sync_channel_card(bot, cog, game, week, week_data, roster, relevant_deadline):
+    """User games show their persistent matchup card as a separate message in the
+    parent week-N-user-games channel (tracked via game['message_id']) — the
+    Schedule/Complete buttons live on a different, plain-text message in the thread.
+    Editing the thread's button message alone does NOT update that channel card,
+    which is why scheduled/completed status wasn't showing up there. Call this to
+    sync it explicitly — from the button handlers on every click, and from
+    /refresh_game_thread as a manual backfill for games whose card is already stale
+    from before this fix (their buttons are disabled now, so nothing else can
+    re-trigger a sync on its own).
+    (CPU games don't need this — their embed and buttons already live on the same
+    message, which gets edited directly wherever this is skipped.)"""
+    if game["type"] != "user":
+        return
+    user_channel_id = week_data.get("user_channel_id")
+    channel_msg_id = game.get("message_id")
+    if not user_channel_id or not channel_msg_id:
+        return
+    try:
+        user_channel = bot.get_channel(user_channel_id) or await bot.fetch_channel(user_channel_id)
+        channel_msg = await user_channel.fetch_message(channel_msg_id)
+        channel_embed, _ = await cog.build_game_embed(
+            game, week, roster, deadline=relevant_deadline, mention_users=False, include_image=False
+        )
+        await channel_msg.edit(embed=channel_embed)
+    except (discord.NotFound, discord.HTTPException, AttributeError):
+        pass
+
+
 class CompleteGameView(discord.ui.View):
     """Persistent buttons for a game: Mark Completed always present, plus an
     optional Mark Scheduled button for user games. Survives bot restarts
@@ -1237,29 +1266,7 @@ class CompleteGameView(discord.ui.View):
         self.add_item(complete_btn)
 
     async def _sync_channel_card(self, game, week, week_data, roster, relevant_deadline):
-        """User games show their persistent matchup card as a separate message in the
-        parent week-N-user-games channel (tracked via game['message_id']) — the
-        Schedule/Complete buttons live on a different, plain-text message in the
-        thread. Editing the thread's button message (done in the callers above) does
-        NOT update that channel card, which is why scheduled/completed status was
-        never showing up there. Sync it explicitly here.
-        (CPU games don't need this — their embed and buttons already live on the same
-        message, which the caller already edited directly.)"""
-        if game["type"] != "user":
-            return
-        user_channel_id = week_data.get("user_channel_id")
-        channel_msg_id = game.get("message_id")
-        if not user_channel_id or not channel_msg_id:
-            return
-        try:
-            user_channel = self.cog.bot.get_channel(user_channel_id) or await self.cog.bot.fetch_channel(user_channel_id)
-            channel_msg = await user_channel.fetch_message(channel_msg_id)
-            channel_embed, _ = await self.cog.build_game_embed(
-                game, week, roster, deadline=relevant_deadline, mention_users=False, include_image=False
-            )
-            await channel_msg.edit(embed=channel_embed)
-        except (discord.NotFound, discord.HTTPException, AttributeError):
-            pass
+        await _sync_channel_card(self.cog.bot, self.cog, game, week, week_data, roster, relevant_deadline)
 
     async def _on_schedule_click(self, interaction: discord.Interaction):
         result = await _load_authorized_game(interaction, self.game_id)
@@ -1998,6 +2005,11 @@ class Scheduling(commands.Cog):
             )
             return
 
+        if week_data.get("user_channel_id") != user_channel.id:
+            week_data["user_channel_id"] = user_channel.id
+            season["weeks"][week_key] = week_data
+            save_season(season)
+
         admin_role = discord.utils.get(guild.roles, name=ADMIN_ROLE_NAME)
         home_owner_id = roster.get(g["home"], {}).get("user_id")
         away_owner_id = roster.get(g["away"], {}).get("user_id")
@@ -2068,11 +2080,18 @@ class Scheduling(commands.Cog):
                 except Exception as e:
                     print(f"[refresh_game_thread] Failed to post scheme card for {team_abbr}: {e}")
 
+        # Also resync the matchup card in the parent channel with the current
+        # scheduled/completed status — this is the manual fix for games whose card
+        # went stale before that sync was added to the button handlers themselves.
+        relevant_deadline = deadline
+        await _sync_channel_card(self.bot, self, g, week, week_data, roster, relevant_deadline)
+
         away_name = self.teams[g["away"]]["name"]
         home_name = self.teams[g["home"]]["name"]
         action = "Created a new thread for" if created_new_thread else "Refreshed"
         await interaction.followup.send(
-            f"✅ {action} **{away_name} vs {home_name}** — reposted buttons and {posted_cards} scheme card(s).",
+            f"✅ {action} **{away_name} vs {home_name}** — reposted buttons, {posted_cards} scheme card(s), "
+            f"and resynced the channel card's status.",
             ephemeral=True,
         )
 
