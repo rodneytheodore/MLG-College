@@ -1236,6 +1236,31 @@ class CompleteGameView(discord.ui.View):
         complete_btn.callback = self._on_complete_click
         self.add_item(complete_btn)
 
+    async def _sync_channel_card(self, game, week, week_data, roster, relevant_deadline):
+        """User games show their persistent matchup card as a separate message in the
+        parent week-N-user-games channel (tracked via game['message_id']) — the
+        Schedule/Complete buttons live on a different, plain-text message in the
+        thread. Editing the thread's button message (done in the callers above) does
+        NOT update that channel card, which is why scheduled/completed status was
+        never showing up there. Sync it explicitly here.
+        (CPU games don't need this — their embed and buttons already live on the same
+        message, which the caller already edited directly.)"""
+        if game["type"] != "user":
+            return
+        user_channel_id = week_data.get("user_channel_id")
+        channel_msg_id = game.get("message_id")
+        if not user_channel_id or not channel_msg_id:
+            return
+        try:
+            user_channel = self.cog.bot.get_channel(user_channel_id) or await self.cog.bot.fetch_channel(user_channel_id)
+            channel_msg = await user_channel.fetch_message(channel_msg_id)
+            channel_embed, _ = await self.cog.build_game_embed(
+                game, week, roster, deadline=relevant_deadline, mention_users=False, include_image=False
+            )
+            await channel_msg.edit(embed=channel_embed)
+        except (discord.NotFound, discord.HTTPException, AttributeError):
+            pass
+
     async def _on_schedule_click(self, interaction: discord.Interaction):
         result = await _load_authorized_game(interaction, self.game_id)
         if result is None:
@@ -1257,6 +1282,7 @@ class CompleteGameView(discord.ui.View):
         if file is not None:
             edit_kwargs["attachments"] = [file]
         await interaction.response.edit_message(**edit_kwargs)
+        await self._sync_channel_card(game, week, week_data, roster, relevant_deadline)
         await interaction.followup.send("📅 Marked as scheduled.", ephemeral=True)
 
     async def _on_complete_click(self, interaction: discord.Interaction):
@@ -1280,6 +1306,7 @@ class CompleteGameView(discord.ui.View):
         if file is not None:
             edit_kwargs["attachments"] = [file]
         await interaction.response.edit_message(**edit_kwargs)
+        await self._sync_channel_card(game, week, week_data, roster, relevant_deadline)
 
         if game["type"] == "user" and game.get("thread_id"):
             thread_id = game["thread_id"]
