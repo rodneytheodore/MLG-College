@@ -998,7 +998,7 @@ async def _do_advance_week(
                     if not team_card or (not team_card.get("offense") and not team_card.get("defense")):
                         continue
                     card_embed = build_compact_scheme_card_embed(scheme_cards_cog.teams[team_abbr], team_card)
-                    card_view = ExpandSchemeCardView(cog=scheme_cards_cog, abbr=team_abbr)
+                    card_view = ExpandSchemeCardView(abbr=team_abbr)
                     await thread.send(embed=card_embed, view=card_view, allowed_mentions=discord.AllowedMentions.none())
 
             g["thread_id"] = thread.id
@@ -1806,7 +1806,7 @@ class Scheduling(commands.Cog):
                     if not team_card or (not team_card.get("offense") and not team_card.get("defense")):
                         continue
                     card_embed = build_compact_scheme_card_embed(scheme_cards_cog.teams[team_abbr], team_card)
-                    card_view = ExpandSchemeCardView(cog=scheme_cards_cog, abbr=team_abbr)
+                    card_view = ExpandSchemeCardView(abbr=team_abbr)
                     await thread.send(embed=card_embed, view=card_view, allowed_mentions=discord.AllowedMentions.none())
 
             g["thread_id"] = thread.id
