@@ -931,7 +931,14 @@ async def _do_advance_week(
         )
         return
 
-    # User channel: everyone can view, only bot/admins can post; thread access granted per-game
+    user_games = [g for g in week_data["games"] if g["type"] == "user"]
+    cpu_games = [g for g in week_data["games"] if g["type"] == "cpu"]
+
+    # User channel: everyone can view, only bot/admins can post; thread access granted per-game.
+    # All owner overwrites are included in the initial create_text_channel() call (a single
+    # API request) rather than added one-by-one afterward with set_permissions() — doing it
+    # per-member in a loop hits Discord's per-channel permission-edit rate limit once a week
+    # has more than a handful of user games.
     admin_role = discord.utils.get(guild.roles, name=ADMIN_ROLE_NAME)
     user_overwrites = {
         guild.default_role: discord.PermissionOverwrite(
@@ -954,15 +961,18 @@ async def _do_advance_week(
             use_application_commands=True,
             manage_threads=True,
         )
+    owner_overwrite = discord.PermissionOverwrite(send_messages_in_threads=True, use_application_commands=True)
+    for g in user_games:
+        for uid in filter(None, (roster.get(g["home"], {}).get("user_id"), roster.get(g["away"], {}).get("user_id"))):
+            member = guild.get_member(uid)
+            if member:
+                user_overwrites[member] = owner_overwrite
     user_channel = await guild.create_text_channel(
         f"week-{week}-user-games",
         category=scheduling_category,
         overwrites=user_overwrites,
     )
     cpu_channel = await guild.create_text_channel(f"week-{week}-cpu-games", category=scheduling_category)
-
-    user_games = [g for g in week_data["games"] if g["type"] == "user"]
-    cpu_games = [g for g in week_data["games"] if g["type"] == "cpu"]
 
     deadline_line = f"\n**Due:** {deadline}" if deadline else ""
 
@@ -989,15 +999,11 @@ async def _do_advance_week(
             home_owner_id = roster.get(g["home"], {}).get("user_id")
             away_owner_id = roster.get(g["away"], {}).get("user_id")
 
-            # Grant the two game owners send + interact permissions in their thread.
-            # Threads don't support their own per-member overwrites (discord.Thread has
-            # no set_permissions) — posting rights in threads are controlled by a
-            # send_messages_in_threads overwrite on the PARENT channel instead. Safe here
-            # because user_channel is a fresh channel created for this week only.
-            for uid in filter(None, (home_owner_id, away_owner_id)):
-                member = guild.get_member(uid)
-                if member:
-                    await user_channel.set_permissions(member, send_messages_in_threads=True, use_application_commands=True)
+            # Note: the two game owners' thread-posting permissions were already granted
+            # via the per-member overwrites baked into user_channel's creation above
+            # (Threads don't support their own per-member overwrites — discord.Thread has
+            # no set_permissions — so posting rights are controlled by a
+            # send_messages_in_threads overwrite on the PARENT channel instead).
 
             # Buttons live in the thread alongside the ping
             game_view = CompleteGameView(cog=cog, game_id=g["game_id"], show_schedule_button=True)
@@ -1784,13 +1790,31 @@ class Scheduling(commands.Cog):
                 f"week-{week}-user-games", category=scheduling_category, overwrites=user_overwrites,
             )
 
-        if user_channel is not None and admin_role:
-            # Backfill the Admin overwrite on channels that already existed before this
-            # feature was added (found by ID or by name above), so a re-run of this
-            # command still grants @Admin thread-posting rights.
-            await user_channel.set_permissions(
-                admin_role, send_messages_in_threads=True, use_application_commands=True, manage_threads=True,
-            )
+        if user_channel is not None:
+            # Backfill the @Admin overwrite and any missing game owners' overwrites in
+            # ONE edit() call, rather than one set_permissions() PUT per member. Doing
+            # it per-member in a loop hits Discord's per-channel permission-edit rate
+            # limit once a week has more than a handful of user games.
+            new_overwrites = dict(user_channel.overwrites)
+            changed = False
+            if admin_role and new_overwrites.get(admin_role) != discord.PermissionOverwrite(
+                send_messages_in_threads=True, use_application_commands=True, manage_threads=True,
+            ):
+                new_overwrites[admin_role] = discord.PermissionOverwrite(
+                    send_messages_in_threads=True, use_application_commands=True, manage_threads=True,
+                )
+                changed = True
+            owner_overwrite = discord.PermissionOverwrite(send_messages_in_threads=True, use_application_commands=True)
+            for g in user_games:
+                if g.get("thread_id") and guild.get_channel_or_thread(g["thread_id"]):
+                    continue  # thread already exists; owners already have access
+                for uid in filter(None, (roster.get(g["home"], {}).get("user_id"), roster.get(g["away"], {}).get("user_id"))):
+                    member = guild.get_member(uid)
+                    if member and new_overwrites.get(member) != owner_overwrite:
+                        new_overwrites[member] = owner_overwrite
+                        changed = True
+            if changed:
+                await user_channel.edit(overwrites=new_overwrites)
 
         cpu_channel = None
         if week_data.get("cpu_channel_id"):
@@ -1828,11 +1852,8 @@ class Scheduling(commands.Cog):
             thread = await game_msg.create_thread(name=f"{g['away']} vs {g['home']} — Week {week}")
             home_owner_id = roster.get(g["home"], {}).get("user_id")
             away_owner_id = roster.get(g["away"], {}).get("user_id")
-
-            for uid in filter(None, (home_owner_id, away_owner_id)):
-                member = guild.get_member(uid)
-                if member:
-                    await user_channel.set_permissions(member, send_messages_in_threads=True, use_application_commands=True)
+            # Owner thread-posting permissions were already granted above in the single
+            # batched edit() call before this loop started.
 
             game_view = CompleteGameView(cog=self, game_id=g["game_id"], show_schedule_button=True)
             await thread.send(
