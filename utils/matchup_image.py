@@ -6,10 +6,10 @@ import aiohttp
 import discord
 from PIL import Image, ImageDraw, ImageFont
 
-TARGET_LOGO_HEIGHT = 200
+TARGET_LOGO_HEIGHT = 75
 CANVAS_BG_COLOR = (49, 51, 56, 255)  # matches Discord's dark embed background
-VS_GAP_WIDTH = 80
-PADDING = 20
+VS_GAP_WIDTH = 30
+PADDING = 9
 
 
 async def _fetch_logo(session: aiohttp.ClientSession, url: str) -> Image.Image:
@@ -42,7 +42,7 @@ def _composite(home_logo: Image.Image, away_logo: Image.Image) -> Image.Image:
     draw = ImageDraw.Draw(canvas)
     try:
         font = ImageFont.truetype(
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 36
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 15
         )
     except OSError:
         font = ImageFont.load_default()
@@ -78,3 +78,26 @@ async def build_matchup_file(home_logo_url: str, away_logo_url: str) -> discord.
     buffer.seek(0)
 
     return discord.File(buffer, filename="matchup.png")
+
+
+# ---- Attachment helpers ----
+#
+# build_matchup_file() (and build_game_embed() in cogs/scheduling.py, which
+# calls it) can return None if the logo fetch/composite fails, so every
+# caller that sends or edits a message with the resulting embed needs the
+# same "only attach if there's actually a file" boilerplate. Centralizing
+# it here (rather than repeating `if file is not None: kwargs[...] = ...`
+# at every call site in scheduling.py, both for CPU and user games) means
+# there's one place to change if that attachment logic ever needs to.
+
+def as_send_kwargs(file: discord.File | None) -> dict:
+    """Spread into channel.send(**kwargs, **as_send_kwargs(file)) to attach a
+    freshly built matchup image, or attach nothing if the build failed."""
+    return {"file": file} if file is not None else {}
+
+
+def as_edit_kwargs(file: discord.File | None) -> dict:
+    """Spread into message.edit(**kwargs, **as_edit_kwargs(file)) to replace
+    a message's image with a freshly built matchup image, or leave the
+    existing attachment untouched if the build failed."""
+    return {"attachments": [file]} if file is not None else {}
