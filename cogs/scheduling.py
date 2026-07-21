@@ -1288,6 +1288,7 @@ class CompleteGameView(discord.ui.View):
         edit_kwargs = {"embed": embed, "view": new_view, **as_edit_kwargs(file)}
         await interaction.response.edit_message(**edit_kwargs)
         await self._sync_channel_card(game, week, week_data, roster, relevant_deadline)
+        await refresh_dashboard(self.cog.bot)
         await interaction.followup.send("📅 Marked as scheduled.", ephemeral=True)
 
     async def _on_complete_click(self, interaction: discord.Interaction):
@@ -1310,6 +1311,7 @@ class CompleteGameView(discord.ui.View):
         edit_kwargs = {"embed": embed, "view": new_view, **as_edit_kwargs(file)}
         await interaction.response.edit_message(**edit_kwargs)
         await self._sync_channel_card(game, week, week_data, roster, relevant_deadline)
+        await refresh_dashboard(self.cog.bot)
 
         if game["type"] == "user" and game.get("thread_id"):
             thread_id = game["thread_id"]
