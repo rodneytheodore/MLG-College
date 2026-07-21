@@ -21,7 +21,7 @@ from utils.data import (
     ADMIN_ROLE_NAME,
 )
 from utils.responses import send_ephemeral
-from utils.matchup_image import build_matchup_file
+from utils.matchup_image import build_matchup_file, as_send_kwargs, as_edit_kwargs
 from cogs.scheme_cards import build_compact_scheme_card_embed, ExpandSchemeCardView
 
 EASTERN = ZoneInfo("America/New_York")
@@ -982,9 +982,7 @@ async def _do_advance_week(
         for g in cpu_games:
             embed, file = await cog.build_game_embed(g, week, roster)
             view = CompleteGameView(cog=cog, game_id=g["game_id"])
-            send_kwargs = {"embed": embed, "view": view, "allowed_mentions": discord.AllowedMentions.none()}
-            if file is not None:
-                send_kwargs["file"] = file
+            send_kwargs = {"embed": embed, "view": view, "allowed_mentions": discord.AllowedMentions.none(), **as_send_kwargs(file)}
             cpu_msg = await cpu_channel.send(**send_kwargs)
             g["message_id"] = cpu_msg.id
     else:
@@ -992,9 +990,10 @@ async def _do_advance_week(
 
     if user_games:
         for g in user_games:
-            # Channel embed: no image, no buttons (clean matchup card only)
-            embed, _ = await cog.build_game_embed(g, week, roster, deadline=deadline, mention_users=False, include_image=False)
-            game_msg = await user_channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+            # Channel embed: matchup logos, no buttons (clean matchup card only)
+            embed, file = await cog.build_game_embed(g, week, roster, deadline=deadline, mention_users=False)
+            send_kwargs = {"embed": embed, "allowed_mentions": discord.AllowedMentions.none(), **as_send_kwargs(file)}
+            game_msg = await user_channel.send(**send_kwargs)
             thread = await game_msg.create_thread(name=f"{g['away']} vs {g['home']} — Week {week}")
             home_owner_id = roster.get(g["home"], {}).get("user_id")
             away_owner_id = roster.get(g["away"], {}).get("user_id")
@@ -1225,10 +1224,11 @@ async def _sync_channel_card(bot, cog, game, week, week_data, roster, relevant_d
     try:
         user_channel = bot.get_channel(user_channel_id) or await bot.fetch_channel(user_channel_id)
         channel_msg = await user_channel.fetch_message(channel_msg_id)
-        channel_embed, _ = await cog.build_game_embed(
-            game, week, roster, deadline=relevant_deadline, mention_users=False, include_image=False
+        channel_embed, file = await cog.build_game_embed(
+            game, week, roster, deadline=relevant_deadline, mention_users=False
         )
-        await channel_msg.edit(embed=channel_embed)
+        edit_kwargs = {"embed": channel_embed, **as_edit_kwargs(file)}
+        await channel_msg.edit(**edit_kwargs)
     except (discord.NotFound, discord.HTTPException, AttributeError):
         pass
 
@@ -1285,9 +1285,7 @@ class CompleteGameView(discord.ui.View):
             cog=self.cog, game_id=self.game_id,
             completed=(game.get("status") == "completed"), scheduled=True, show_schedule_button=True,
         )
-        edit_kwargs = {"embed": embed, "view": new_view}
-        if file is not None:
-            edit_kwargs["attachments"] = [file]
+        edit_kwargs = {"embed": embed, "view": new_view, **as_edit_kwargs(file)}
         await interaction.response.edit_message(**edit_kwargs)
         await self._sync_channel_card(game, week, week_data, roster, relevant_deadline)
         await interaction.followup.send("📅 Marked as scheduled.", ephemeral=True)
@@ -1309,9 +1307,7 @@ class CompleteGameView(discord.ui.View):
             cog=self.cog, game_id=self.game_id,
             completed=True, scheduled=game.get("scheduled", False), show_schedule_button=(game["type"] == "user"),
         )
-        edit_kwargs = {"embed": embed, "view": new_view}
-        if file is not None:
-            edit_kwargs["attachments"] = [file]
+        edit_kwargs = {"embed": embed, "view": new_view, **as_edit_kwargs(file)}
         await interaction.response.edit_message(**edit_kwargs)
         await self._sync_channel_card(game, week, week_data, roster, relevant_deadline)
 
@@ -1526,9 +1522,7 @@ class Scheduling(commands.Cog):
                 if cpu_channel:
                     embed, file = await self.build_game_embed(g, current_week, roster)
                     view = CompleteGameView(cog=self, game_id=g["game_id"])
-                    send_kwargs = {"embed": embed, "view": view, "allowed_mentions": discord.AllowedMentions.none()}
-                    if file is not None:
-                        send_kwargs["file"] = file
+                    send_kwargs = {"embed": embed, "view": view, "allowed_mentions": discord.AllowedMentions.none(), **as_send_kwargs(file)}
                     new_msg = await cpu_channel.send(**send_kwargs)
                     g["message_id"] = new_msg.id
 
@@ -1540,9 +1534,7 @@ class Scheduling(commands.Cog):
                     try:
                         msg = await cpu_channel.fetch_message(g["message_id"])
                         embed, file = await self.build_game_embed(g, current_week, roster)
-                        edit_kwargs = {"embed": embed}
-                        if file is not None:
-                            edit_kwargs["attachments"] = [file]
+                        edit_kwargs = {"embed": embed, **as_edit_kwargs(file)}
                         await msg.edit(**edit_kwargs)
                     except (discord.NotFound, discord.HTTPException):
                         pass
@@ -1867,9 +1859,7 @@ class Scheduling(commands.Cog):
                 continue
             embed, file = await self.build_game_embed(g, week, roster)
             view = CompleteGameView(cog=self, game_id=g["game_id"])
-            send_kwargs = {"embed": embed, "view": view, "allowed_mentions": discord.AllowedMentions.none()}
-            if file is not None:
-                send_kwargs["file"] = file
+            send_kwargs = {"embed": embed, "view": view, "allowed_mentions": discord.AllowedMentions.none(), **as_send_kwargs(file)}
             cpu_msg = await cpu_channel.send(**send_kwargs)
             g["message_id"] = cpu_msg.id
             posted_cpu += 1
@@ -1881,8 +1871,9 @@ class Scheduling(commands.Cog):
             if existing_thread:
                 continue
 
-            embed, _ = await self.build_game_embed(g, week, roster, deadline=deadline, mention_users=False, include_image=False)
-            game_msg = await user_channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+            embed, file = await self.build_game_embed(g, week, roster, deadline=deadline, mention_users=False)
+            send_kwargs = {"embed": embed, "allowed_mentions": discord.AllowedMentions.none(), **as_send_kwargs(file)}
+            game_msg = await user_channel.send(**send_kwargs)
             thread = await game_msg.create_thread(name=f"{g['away']} vs {g['home']} — Week {week}")
             home_owner_id = roster.get(g["home"], {}).get("user_id")
             away_owner_id = roster.get(g["away"], {}).get("user_id")
@@ -2046,8 +2037,9 @@ class Scheduling(commands.Cog):
 
         created_new_thread = False
         if thread is None:
-            embed, _ = await self.build_game_embed(g, week, roster, deadline=deadline, mention_users=False, include_image=False)
-            game_msg = await user_channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+            embed, file = await self.build_game_embed(g, week, roster, deadline=deadline, mention_users=False)
+            send_kwargs = {"embed": embed, "allowed_mentions": discord.AllowedMentions.none(), **as_send_kwargs(file)}
+            game_msg = await user_channel.send(**send_kwargs)
             thread = await game_msg.create_thread(name=f"{g['away']} vs {g['home']} — Week {week}")
             g["thread_id"] = thread.id
             g["message_id"] = game_msg.id
