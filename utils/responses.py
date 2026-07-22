@@ -5,7 +5,7 @@ AUTO_CLEAR_SECONDS = 60
 
 
 async def send_ephemeral(interaction: discord.Interaction, content: str = None, *, embed: discord.Embed = None,
-                          view: discord.ui.View = None, delete_after: int = AUTO_CLEAR_SECONDS):
+                          view: discord.ui.View = None, file: discord.File = None, delete_after: int = AUTO_CLEAR_SECONDS):
     """Sends an ephemeral interaction response, then deletes it automatically after delete_after seconds.
     Use this instead of interaction.response.send_message(..., ephemeral=True) directly."""
     kwargs = {"ephemeral": True}
@@ -15,6 +15,8 @@ async def send_ephemeral(interaction: discord.Interaction, content: str = None, 
         kwargs["embed"] = embed
     if view is not None:
         kwargs["view"] = view
+    if file is not None:
+        kwargs["file"] = file
 
     await interaction.response.send_message(**kwargs)
 

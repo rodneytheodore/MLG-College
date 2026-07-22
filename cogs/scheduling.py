@@ -1,3 +1,6 @@
+import io
+import re
+
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -1155,6 +1158,18 @@ def classify_game(home_abbr: str, away_abbr: str, roster: dict) -> str:
     return "cpu"
 
 
+def _split_matchup_line(line: str) -> tuple[str, str]:
+    """Splits a bulk-import line like 'Georgia @ Alabama' or 'Georgia vs Alabama'
+    into (away_raw, home_raw). Also accepts a comma as a separator
+    ('Georgia, Alabama'). Returns (None, None) if the line can't be split
+    into exactly two parts."""
+    for sep_pattern in (r"\s*@\s*", r"\s+vs\.?\s+", r"\s+v\.?\s+", r"\s*,\s*"):
+        parts = re.split(sep_pattern, line, maxsplit=1, flags=re.IGNORECASE)
+        if len(parts) == 2 and parts[0].strip() and parts[1].strip():
+            return parts[0].strip(), parts[1].strip()
+    return None, None
+
+
 def resolve_target_week(season: dict, target: str) -> tuple[int, str]:
     """Resolve 'current' or 'next' to an actual week number.
     Returns (week_number, description_for_confirmation).
@@ -1639,6 +1654,182 @@ class Scheduling(commands.Cog):
     @add_game.autocomplete("away")
     async def add_game_away_autocomplete(self, interaction: discord.Interaction, current: str):
         return await self.team_autocomplete(interaction, current)
+
+    @app_commands.command(name="add_games_bulk", description="Add matchups from a text file — supports a whole season with 'Week N:' headers (admin only)")
+    @app_commands.describe(
+        target="Which week to use for lines before any 'Week N:' header (ignored once a header appears)",
+        file="A .txt file. Either one matchup per line ('Georgia @ Alabama'), or a whole season using "
+             "'Week 1:' / 'Week 2:' headers to switch weeks partway through the file.",
+    )
+    @app_commands.choices(target=[
+        app_commands.Choice(name="Current Week", value="current"),
+        app_commands.Choice(name="Next Week", value="next"),
+    ])
+    async def add_games_bulk(self, interaction: discord.Interaction, target: str, file: discord.Attachment):
+        if not is_admin(interaction):
+            await send_ephemeral(interaction, "Only admins can add games.")
+            return
+
+        if not file.filename.lower().endswith((".txt", ".csv")):
+            await send_ephemeral(
+                interaction,
+                "Please attach a `.txt` or `.csv` file, one matchup per line, e.g. `Georgia @ Alabama`."
+            )
+            return
+
+        try:
+            raw_bytes = await file.read()
+            text = raw_bytes.decode("utf-8")
+        except Exception:
+            await send_ephemeral(interaction, "Couldn't read that file. Make sure it's plain text (UTF-8).")
+            return
+
+        season = load_season()
+        roster = load_roster()
+
+        # Per-week state, keyed by week number. Built up lazily as headers
+        # (or the default `target`) select a week to work on.
+        week_states = {}
+        errors = []
+        lines_seen = 0
+        active_week_num = None
+
+        def get_week_state(week_num):
+            if week_num in week_states:
+                return week_states[week_num]
+            week_key = str(week_num)
+            week_data = season.setdefault("weeks", {}).setdefault(week_key, {
+                "status": "upcoming",
+                "user_channel_id": None,
+                "cpu_channel_id": None,
+                "games": [],
+            })
+            teams_in_use = {}
+            for g in week_data["games"]:
+                teams_in_use[g["home"]] = g["home"]
+                teams_in_use[g["away"]] = g["away"]
+            state = {
+                "week_data": week_data,
+                "week_label": f"Week {week_num}",
+                "teams_in_use": teams_in_use,
+                "game_number": len(week_data["games"]) + 1,
+                "added": [],
+                "blocked": week_data.get("status") == "active",
+            }
+            week_states[week_num] = state
+            return state
+
+        for line_num, raw_line in enumerate(text.splitlines(), start=1):
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+
+            header_match = re.match(r"^(?:week|wk)\s*#?\s*(\d+)\s*:?\s*$", line, re.IGNORECASE)
+            if header_match:
+                active_week_num = int(header_match.group(1))
+                state = get_week_state(active_week_num)
+                if state["blocked"] and not state.get("blocked_reported"):
+                    errors.append(f"Week {active_week_num}: already active — all lines under this header were skipped.")
+                    state["blocked_reported"] = True
+                continue
+
+            lines_seen += 1
+
+            if active_week_num is None:
+                # No header seen yet — fall back to the target dropdown.
+                week_num, week_label = resolve_target_week(season, target)
+                active_week_num = week_num
+                state = get_week_state(active_week_num)
+                state["week_label"] = week_label
+                if state["blocked"] and not state.get("blocked_reported"):
+                    errors.append(f"{week_label}: already active — games can't be added to a live week.")
+                    state["blocked_reported"] = True
+
+            state = week_states[active_week_num]
+            if state["blocked"]:
+                continue
+
+            away_raw, home_raw = _split_matchup_line(line)
+            if away_raw is None:
+                errors.append(f"Line {line_num}: couldn't parse `{line}` — use `Away @ Home` or `Away vs Home`.")
+                continue
+
+            home_abbr, home_error = resolve_team(home_raw, self.teams)
+            away_abbr, away_error = resolve_team(away_raw, self.teams)
+
+            if home_error or away_error:
+                if home_error:
+                    errors.append(f"Line {line_num}: home team — {home_error}")
+                if away_error:
+                    errors.append(f"Line {line_num}: away team — {away_error}")
+                continue
+
+            if home_abbr == away_abbr:
+                errors.append(f"Line {line_num}: `{line}` — a team can't play itself.")
+                continue
+
+            teams_in_use = state["teams_in_use"]
+            if home_abbr in teams_in_use or away_abbr in teams_in_use:
+                conflict = home_abbr if home_abbr in teams_in_use else away_abbr
+                errors.append(
+                    f"Line {line_num} ({state['week_label']}): `{conflict}` is already scheduled "
+                    f"in another game that week."
+                )
+                continue
+
+            game_type = classify_game(home_abbr, away_abbr, roster)
+            state["week_data"]["games"].append({
+                "game_id": f"w{active_week_num}_g{state['game_number']}",
+                "home": home_abbr,
+                "away": away_abbr,
+                "type": game_type,
+                "status": "scheduled",
+                "scheduled": False,
+                "thread_id": None,
+                "message_id": None,
+            })
+            teams_in_use[home_abbr] = home_abbr
+            teams_in_use[away_abbr] = away_abbr
+            state["added"].append(
+                f"{self.teams[away_abbr]['name']} vs {self.teams[home_abbr]['name']} ({game_type.upper()})"
+            )
+            state["game_number"] += 1
+
+        total_added = sum(len(s["added"]) for s in week_states.values())
+        if total_added:
+            save_season(season)
+
+        if lines_seen == 0:
+            await send_ephemeral(interaction, "That file didn't have any matchup lines in it.")
+            return
+
+        summary_lines = [f"Added {total_added} game(s) across {len(week_states)} week(s):"]
+        for week_num in sorted(week_states):
+            state = week_states[week_num]
+            if not state["added"]:
+                continue
+            summary_lines.append("")
+            summary_lines.append(f"**{state['week_label']}** — {len(state['added'])} game(s):")
+            summary_lines.extend(f"- {line}" for line in state["added"])
+        if errors:
+            summary_lines.append("")
+            summary_lines.append(f"**{len(errors)} line(s) skipped:**")
+            summary_lines.extend(f"- {e}" for e in errors)
+        summary_lines.append("")
+        summary_lines.append("Run `/view_week` to see the full staged list for a given week.")
+
+        message = "\n".join(summary_lines)
+
+        if len(message) > 1900:
+            results_file = discord.File(io.BytesIO(message.encode("utf-8")), filename="bulk_add_results.txt")
+            await send_ephemeral(
+                interaction,
+                f"Added {total_added} game(s) across {len(week_states)} week(s), "
+                f"{len(errors)} line(s) skipped — full details attached.",
+                file=results_file,
+            )
+        else:
+            await send_ephemeral(interaction, message)
 
     @app_commands.command(name="remove_game", description="Remove a staged matchup from a week (admin only)")
     @app_commands.describe(target="Which week to remove from", game="The matchup to remove")
