@@ -905,6 +905,10 @@ async def _do_advance_week(
     week_key = str(week)
     week_data = season.get("weeks", {}).get(week_key)
 
+    # Remember which week we're advancing FROM, before anything below overwrites
+    # season["current_week"] — its channels get deleted once the new week is live.
+    previous_week_num = season.get("current_week")
+
     if not week_data or not week_data.get("games"):
         await interaction.followup.send(
             f"No staged games found for {week_label}. Use `/add_game` first.", ephemeral=True
@@ -1051,6 +1055,18 @@ async def _do_advance_week(
     save_season(season)
     await refresh_dashboard(bot)
 
+    # Clean up the week we just advanced FROM — its channels (and everything posted
+    # in them, including game threads) are no longer needed once the new week is live.
+    deleted_channels_note = ""
+    if previous_week_num is not None and previous_week_num != week:
+        prev_week_data = season.get("weeks", {}).get(str(previous_week_num))
+        if prev_week_data:
+            deleted, delete_errors = await _delete_channels_for_week(guild, prev_week_data)
+            if deleted:
+                deleted_channels_note = f" Deleted Week {previous_week_num}'s {' and '.join(deleted)} channel(s)."
+            if delete_errors:
+                deleted_channels_note += f" (Couldn't delete: {'; '.join(delete_errors)})"
+
     # Post announcement to #announcements channel
     ann_channel = discord.utils.find(
         lambda c: c.name.lower() in ("announcements", "announcement"),
@@ -1075,7 +1091,7 @@ async def _do_advance_week(
 
     phase_msg = f" — now in **{PHASE_DISPLAY[new_phase]}**" if new_phase else ""
     await interaction.followup.send(
-        f"Advanced to Week {week}{phase_msg}. Channels and threads are live.", ephemeral=True
+        f"Advanced to Week {week}{phase_msg}. Channels and threads are live.{deleted_channels_note}", ephemeral=True
     )
 
 
@@ -1216,6 +1232,32 @@ async def _load_authorized_game(interaction: discord.Interaction, game_id: str):
         return None
 
     return season, week, game, roster
+
+
+async def _delete_channels_for_week(guild, week_data):
+    """Deletes a week's 'X User Games' / 'X CPU Games' channels once they're no longer
+    needed (called right after advancing past that week). Returns (deleted_labels,
+    error_messages) instead of raising — a channel that's already gone, or one the bot
+    lacks permission to delete, shouldn't block advancing to the new week."""
+    deleted = []
+    errors = []
+    for key, label in (("user_channel_id", "user games"), ("cpu_channel_id", "CPU games")):
+        channel_id = week_data.get(key)
+        if not channel_id:
+            continue
+        channel = guild.get_channel(channel_id)
+        if channel is None:
+            continue
+        try:
+            await channel.delete(reason="Advancing to a new week")
+            deleted.append(label)
+        except discord.NotFound:
+            continue
+        except discord.Forbidden:
+            errors.append(f"missing permission to delete {label} channel")
+        except discord.HTTPException as e:
+            errors.append(f"{label} channel: {e}")
+    return deleted, errors
 
 
 async def _sync_channel_card(bot, cog, game, week, week_data, roster, relevant_deadline):
@@ -1670,10 +1712,16 @@ class Scheduling(commands.Cog):
             await send_ephemeral(interaction, "Only admins can add games.")
             return
 
-        if not file.filename.lower().endswith((".txt", ".csv")):
+        content_type = (file.content_type or "").lower()
+        obviously_binary = any(
+            marker in content_type
+            for marker in ("image/", "video/", "audio/", "pdf", "zip", "msword", "officedocument")
+        )
+        if obviously_binary:
             await send_ephemeral(
                 interaction,
-                "Please attach a `.txt` or `.csv` file, one matchup per line, e.g. `Georgia @ Alabama`."
+                "That doesn't look like a plain text file. Please attach a `.txt` or `.csv` file "
+                "(a text file with no extension is fine too), one matchup per line, e.g. `Georgia @ Alabama`."
             )
             return
 
