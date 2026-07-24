@@ -1487,10 +1487,13 @@ class Scheduling(commands.Cog):
             else:
                 description = f"{away_username} vs {home_username}"
         else:
+            # CPU games: just tag whichever side has an owner (no "vs CPU" suffix —
+            # it's implied by being in the CPU games channel). Falls back to "CPU vs CPU"
+            # only when neither side is owned, since there's no user to tag at all.
             if away_owner_id:
-                description = f"<@{away_owner_id}> vs CPU"
+                description = f"<@{away_owner_id}>"
             elif home_owner_id:
-                description = f"CPU vs <@{home_owner_id}>"
+                description = f"<@{home_owner_id}>"
             else:
                 description = "CPU vs CPU"
 
@@ -1503,8 +1506,14 @@ class Scheduling(commands.Cog):
         else:
             color = discord.Color.default()
 
+        # School name only ("Georgia vs Alabama") — shorter than the full
+        # mascot name ("Georgia Bulldogs vs Alabama Crimson Tide"), for both
+        # CPU and user games.
+        away_title = away.get("school") or away["name"]
+        home_title = home.get("school") or home["name"]
+
         embed = discord.Embed(
-            title=f"{away['name']} vs {home['name']}",
+            title=f"{away_title} vs {home_title}",
             description=description,
             color=color,
         )
