@@ -33,17 +33,22 @@ DIVIDER_COLOR = (58, 60, 65, 255)
 # logical size means it stays crisp instead of looking upscaled/blurry.
 SCALE = 3
 
-CARD_WIDTH_LOGICAL = 460
-ROW_HEIGHT_LOGICAL = 36
-LOGO_SIZE_LOGICAL = 28
-PADDING_X_LOGICAL = 16
-TOP_PADDING_LOGICAL = 10
-BOTTOM_PADDING_LOGICAL = 10
+CARD_WIDTH_LOGICAL = 620
+ROW_HEIGHT_LOGICAL = 46
+LOGO_SIZE_LOGICAL = 36
+PADDING_X_LOGICAL = 20
+TOP_PADDING_LOGICAL = 14
+BOTTOM_PADDING_LOGICAL = 14
 
-RANK_FONT_SIZE_LOGICAL = 15
-TEAM_FONT_SIZE_LOGICAL = 15
-RECORD_FONT_SIZE_LOGICAL = 13
-MOVEMENT_FONT_SIZE_LOGICAL = 13
+RANK_FONT_SIZE_LOGICAL = 19
+TEAM_FONT_SIZE_LOGICAL = 19
+RECORD_FONT_SIZE_LOGICAL = 17
+MOVEMENT_FONT_SIZE_LOGICAL = 17
+
+RANK_COL_WIDTH_LOGICAL = 36
+LOGO_TO_TEAM_GAP_LOGICAL = 14
+MOVEMENT_COL_FROM_RIGHT_LOGICAL = 190
+RECORD_COL_FROM_RIGHT_LOGICAL = 95
 
 CARD_WIDTH = CARD_WIDTH_LOGICAL * SCALE
 ROW_HEIGHT = ROW_HEIGHT_LOGICAL * SCALE
@@ -96,12 +101,20 @@ FLAT_COLOR = (148, 150, 155, 255)
 
 
 def _parse_movement(movement: str):
-    """Splits a movement string like '▲4' / '▼2' / 'NEW' / '—' into
-    (direction, magnitude_text, color). direction is 'up', 'down', or None
-    (for NEW / flat, which are drawn as plain text, not triangles)."""
+    """Splits a movement string into (direction, magnitude_text, color).
+    direction is 'up', 'down', or None (for NEW / flat, which are drawn as
+    plain text, not triangles).
+
+    Accepts either arrow-prefixed strings ('▲4' / '▼2') or sign-prefixed
+    strings ('+4' / '-2'), since the data feeding this render has used both
+    formats at different points in the pipeline."""
     if movement.startswith("▲"):
         return "up", movement[1:], UP_COLOR
     if movement.startswith("▼"):
+        return "down", movement[1:], DOWN_COLOR
+    if movement.startswith("+") and movement[1:].isdigit():
+        return "up", movement[1:], UP_COLOR
+    if movement.startswith("-") and movement[1:].isdigit():
         return "down", movement[1:], DOWN_COLOR
     if movement.upper() == "NEW":
         return None, "NEW", NEW_COLOR
@@ -182,21 +195,21 @@ async def build_top25_file(rows: list[dict]) -> discord.File | None:
     for i, row in enumerate(rows):
         x = PADDING_X
         draw.text((x, y + (ROW_HEIGHT - RANK_FONT_SIZE) // 2), f"{row['rank']:>2}", font=rank_font, fill=(200, 202, 205, 255))
-        x += 28 * SCALE
+        x += RANK_COL_WIDTH_LOGICAL * SCALE
 
         logo = logo_imgs[i]
         if logo is not None:
             square_logo = _resize_to_square(logo, LOGO_SIZE)
             canvas.paste(square_logo, (x, y + (ROW_HEIGHT - LOGO_SIZE) // 2), square_logo)
-        x += LOGO_SIZE + 10 * SCALE
+        x += LOGO_SIZE + LOGO_TO_TEAM_GAP_LOGICAL * SCALE
 
         draw.text((x, y + (ROW_HEIGHT - TEAM_FONT_SIZE) // 2), row["team_name"], font=team_font, fill=(255, 255, 255, 255))
 
         movement = row.get("movement", "—")
-        _draw_movement(draw, CARD_WIDTH - 140 * SCALE, y, ROW_HEIGHT, movement, movement_font)
+        _draw_movement(draw, CARD_WIDTH - MOVEMENT_COL_FROM_RIGHT_LOGICAL * SCALE, y, ROW_HEIGHT, movement, movement_font)
 
         record = row.get("record", "")
-        draw.text((CARD_WIDTH - 70 * SCALE, y + (ROW_HEIGHT - RECORD_FONT_SIZE) // 2), record,
+        draw.text((CARD_WIDTH - RECORD_COL_FROM_RIGHT_LOGICAL * SCALE, y + (ROW_HEIGHT - RECORD_FONT_SIZE) // 2), record,
                    font=record_font, fill=(180, 182, 185, 255))
 
         y += ROW_HEIGHT
