@@ -5,6 +5,15 @@ Mirrors the fetch/composite/attach pattern established in utils/matchup_image.py
 this module returns a discord.File the caller attaches to a message, with the
 embed referencing it via attachment://top25.png (see as_send_kwargs/as_edit_kwargs
 in matchup_image.py, which work with any discord.File and are reused here too).
+
+CHANGES vs previous version:
+  1. Renders at SCALE x the final size (supersampling), so Discord's embed
+     scaling doesn't blur the image the way a native-resolution render does.
+  2. Movement arrows are now drawn as actual triangle polygons instead of
+     relying on the font having glyphs for U+25B2 / U+25BC — the fallback
+     fonts (Liberation Sans) and PIL's built-in bitmap font don't reliably
+     include those characters, which is why arrows were posting as blank
+     boxes / missing glyphs.
 """
 
 import asyncio
@@ -18,17 +27,35 @@ CANVAS_BG_COLOR = (49, 51, 56, 255)  # matches Discord's dark embed background, 
 ROW_BG_ALT = (43, 45, 49, 255)
 DIVIDER_COLOR = (58, 60, 65, 255)
 
-CARD_WIDTH = 460
-ROW_HEIGHT = 36
-LOGO_SIZE = 28
-PADDING_X = 16
-TOP_PADDING = 10
-BOTTOM_PADDING = 10
+# Supersampling factor: everything below is defined at "logical" size, then
+# multiplied by SCALE when actually drawing. Discord will display the image
+# scaled to whatever width the embed uses, so rendering 2-3x sharper than the
+# logical size means it stays crisp instead of looking upscaled/blurry.
+SCALE = 3
 
-RANK_FONT_SIZE = 15
-TEAM_FONT_SIZE = 15
-RECORD_FONT_SIZE = 13
-MOVEMENT_FONT_SIZE = 13
+CARD_WIDTH_LOGICAL = 460
+ROW_HEIGHT_LOGICAL = 36
+LOGO_SIZE_LOGICAL = 28
+PADDING_X_LOGICAL = 16
+TOP_PADDING_LOGICAL = 10
+BOTTOM_PADDING_LOGICAL = 10
+
+RANK_FONT_SIZE_LOGICAL = 15
+TEAM_FONT_SIZE_LOGICAL = 15
+RECORD_FONT_SIZE_LOGICAL = 13
+MOVEMENT_FONT_SIZE_LOGICAL = 13
+
+CARD_WIDTH = CARD_WIDTH_LOGICAL * SCALE
+ROW_HEIGHT = ROW_HEIGHT_LOGICAL * SCALE
+LOGO_SIZE = LOGO_SIZE_LOGICAL * SCALE
+PADDING_X = PADDING_X_LOGICAL * SCALE
+TOP_PADDING = TOP_PADDING_LOGICAL * SCALE
+BOTTOM_PADDING = BOTTOM_PADDING_LOGICAL * SCALE
+
+RANK_FONT_SIZE = RANK_FONT_SIZE_LOGICAL * SCALE
+TEAM_FONT_SIZE = TEAM_FONT_SIZE_LOGICAL * SCALE
+RECORD_FONT_SIZE = RECORD_FONT_SIZE_LOGICAL * SCALE
+MOVEMENT_FONT_SIZE = MOVEMENT_FONT_SIZE_LOGICAL * SCALE
 
 # Primary DejaVu paths (Debian/Ubuntu with fonts-dejavu-core installed), plus a
 # couple of common fallback locations. If none of these exist on the host —
@@ -68,14 +95,40 @@ NEW_COLOR = (88, 101, 242, 255)
 FLAT_COLOR = (148, 150, 155, 255)
 
 
-def _movement_color(movement: str) -> tuple:
+def _parse_movement(movement: str):
+    """Splits a movement string like '▲4' / '▼2' / 'NEW' / '—' into
+    (direction, magnitude_text, color). direction is 'up', 'down', or None
+    (for NEW / flat, which are drawn as plain text, not triangles)."""
     if movement.startswith("▲"):
-        return UP_COLOR
+        return "up", movement[1:], UP_COLOR
     if movement.startswith("▼"):
-        return DOWN_COLOR
+        return "down", movement[1:], DOWN_COLOR
     if movement.upper() == "NEW":
-        return NEW_COLOR
-    return FLAT_COLOR
+        return None, "NEW", NEW_COLOR
+    return None, movement, FLAT_COLOR
+
+
+def _draw_movement(draw, x: int, y: int, row_height: int, movement: str, font) -> None:
+    """Draws the movement indicator. Arrows are drawn as filled triangle
+    polygons (not font glyphs) since font glyph coverage for U+25B2/U+25BC is
+    unreliable across fallback fonts and PIL's built-in bitmap font."""
+    direction, label, color = _parse_movement(movement)
+    cy = y + row_height // 2
+
+    if direction is None:
+        draw.text((x, y + (row_height - MOVEMENT_FONT_SIZE) // 2), label, font=font, fill=color)
+        return
+
+    tri_size = MOVEMENT_FONT_SIZE
+    half = tri_size // 2
+    if direction == "up":
+        points = [(x, cy + half), (x + tri_size, cy + half), (x + tri_size // 2, cy - half)]
+    else:
+        points = [(x, cy - half), (x + tri_size, cy - half), (x + tri_size // 2, cy + half)]
+    draw.polygon(points, fill=color)
+
+    text_x = x + tri_size + (6 * SCALE)
+    draw.text((text_x, y + (row_height - MOVEMENT_FONT_SIZE) // 2), label, font=font, fill=color)
 
 
 async def _fetch_logo(session: aiohttp.ClientSession, url: str) -> Image.Image | None:
@@ -93,7 +146,7 @@ async def _fetch_logo(session: aiohttp.ClientSession, url: str) -> Image.Image |
 def _resize_to_square(img: Image.Image, size: int) -> Image.Image:
     ratio = size / max(img.width, img.height)
     new_w, new_h = max(1, int(img.width * ratio)), max(1, int(img.height * ratio))
-    resized = img.resize((new_w, new_h))
+    resized = img.resize((new_w, new_h), Image.LANCZOS)
     # Center the (possibly non-square) resized logo on a transparent square canvas
     # so every row's logo occupies the same footprint regardless of source aspect ratio.
     square = Image.new("RGBA", (size, size), (0, 0, 0, 0))
@@ -129,27 +182,26 @@ async def build_top25_file(rows: list[dict]) -> discord.File | None:
     for i, row in enumerate(rows):
         x = PADDING_X
         draw.text((x, y + (ROW_HEIGHT - RANK_FONT_SIZE) // 2), f"{row['rank']:>2}", font=rank_font, fill=(200, 202, 205, 255))
-        x += 28
+        x += 28 * SCALE
 
         logo = logo_imgs[i]
         if logo is not None:
             square_logo = _resize_to_square(logo, LOGO_SIZE)
             canvas.paste(square_logo, (x, y + (ROW_HEIGHT - LOGO_SIZE) // 2), square_logo)
-        x += LOGO_SIZE + 10
+        x += LOGO_SIZE + 10 * SCALE
 
         draw.text((x, y + (ROW_HEIGHT - TEAM_FONT_SIZE) // 2), row["team_name"], font=team_font, fill=(255, 255, 255, 255))
 
         movement = row.get("movement", "—")
-        draw.text((CARD_WIDTH - 140, y + (ROW_HEIGHT - MOVEMENT_FONT_SIZE) // 2), movement,
-                   font=movement_font, fill=_movement_color(movement))
+        _draw_movement(draw, CARD_WIDTH - 140 * SCALE, y, ROW_HEIGHT, movement, movement_font)
 
         record = row.get("record", "")
-        draw.text((CARD_WIDTH - 70, y + (ROW_HEIGHT - RECORD_FONT_SIZE) // 2), record,
+        draw.text((CARD_WIDTH - 70 * SCALE, y + (ROW_HEIGHT - RECORD_FONT_SIZE) // 2), record,
                    font=record_font, fill=(180, 182, 185, 255))
 
         y += ROW_HEIGHT
         if i < len(rows) - 1:
-            draw.line((PADDING_X, y, CARD_WIDTH - PADDING_X, y), fill=DIVIDER_COLOR, width=1)
+            draw.line((PADDING_X, y, CARD_WIDTH - PADDING_X, y), fill=DIVIDER_COLOR, width=1 * SCALE)
 
     buffer = io.BytesIO()
     canvas.save(buffer, format="PNG")
