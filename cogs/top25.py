@@ -14,7 +14,7 @@ from utils.responses import send_ephemeral
 from utils.matchup_image import as_send_kwargs
 from utils.top25_render import build_top25_file
 
-EMBED_COLOR = 0xC81E1E
+EMBED_COLOR = 0xFFD700  # gold — matches the accent already used for user-game embeds in scheduling.py
 
 
 def _parse_top25_text(text: str, teams: dict) -> tuple[list[dict], list[str]]:
