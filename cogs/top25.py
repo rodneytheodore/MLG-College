@@ -30,14 +30,43 @@ def _parse_top25_text(text: str, teams: dict) -> tuple[list[dict], list[str]]:
     if not lines:
         return rows, errors
 
-    first_token = re.split(r"\t+|\s{2,}", lines[0].strip())[0]
+    # Drop markdown-table separator rows entirely, e.g. "|--|---|------|------|--|"
+    # or "---|---|---|---" — these are pure formatting, not a bad data line.
+    separator_re = re.compile(r"^[\s|:\-]+$")
+    lines = [ln for ln in lines if not separator_re.match(ln.strip())]
+    if not lines:
+        return rows, errors
+
+    # Anchors a single-space-separated row on the rank (leading digits) and the
+    # record (digits-dash-digits), so a multi-word team name like "Ohio State"
+    # or "Notre Dame" in between doesn't get split into extra columns. Only
+    # used as a last resort, after tab- and multi-space-separated parsing fail.
+    single_space_re = re.compile(r"^(\d+)\s+(\S+)\s+(.+?)\s+(\d+-\d+)(?:\s+\d+)?$")
+
+    def split_row(raw_line: str) -> list[str]:
+        stripped = raw_line.strip()
+        if "|" in stripped:
+            # Markdown-style row: "|1 |— |Miami |4-0 |1 |" — strip leading/trailing
+            # pipe before splitting so we don't get empty edge cells.
+            inner = stripped.strip("|")
+            return [p.strip() for p in inner.split("|") if p.strip() != ""]
+        parts = [p.strip() for p in raw_line.split("\t") if p.strip() != ""]
+        if len(parts) >= 4:
+            return parts
+        parts = [p.strip() for p in re.split(r"\s{2,}", stripped) if p.strip() != ""]
+        if len(parts) >= 4:
+            return parts
+        match = single_space_re.match(stripped)
+        if match:
+            return [match.group(1), match.group(2), match.group(3), match.group(4)]
+        return parts
+
+    first_token = split_row(lines[0])[0] if split_row(lines[0]) else ""
     if not first_token.isdigit():
         lines = lines[1:]  # drop the header row, e.g. "Rk  Mv  Team  Record  LW"
 
     for line_num, raw_line in enumerate(lines, start=1):
-        parts = [p.strip() for p in raw_line.split("\t") if p.strip() != ""]
-        if len(parts) < 4:
-            parts = [p.strip() for p in re.split(r"\s{2,}", raw_line.strip()) if p.strip() != ""]
+        parts = split_row(raw_line)
         if len(parts) < 4:
             errors.append(f"Line {line_num}: couldn't parse `{raw_line.strip()}` — expected Rank, Movement, Team, Record.")
             continue
