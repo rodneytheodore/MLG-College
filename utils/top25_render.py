@@ -50,6 +50,11 @@ LOGO_TO_TEAM_GAP_LOGICAL = 14
 MOVEMENT_COL_FROM_RIGHT_LOGICAL = 190
 RECORD_COL_FROM_RIGHT_LOGICAL = 95
 
+HEADER_HEIGHT_LOGICAL = 34
+HEADER_FONT_SIZE_LOGICAL = 13
+HEADER_BG_COLOR = (36, 38, 42, 255)
+HEADER_TEXT_COLOR = (140, 143, 148, 255)
+
 CARD_WIDTH = CARD_WIDTH_LOGICAL * SCALE
 ROW_HEIGHT = ROW_HEIGHT_LOGICAL * SCALE
 LOGO_SIZE = LOGO_SIZE_LOGICAL * SCALE
@@ -61,6 +66,9 @@ RANK_FONT_SIZE = RANK_FONT_SIZE_LOGICAL * SCALE
 TEAM_FONT_SIZE = TEAM_FONT_SIZE_LOGICAL * SCALE
 RECORD_FONT_SIZE = RECORD_FONT_SIZE_LOGICAL * SCALE
 MOVEMENT_FONT_SIZE = MOVEMENT_FONT_SIZE_LOGICAL * SCALE
+
+HEADER_HEIGHT = HEADER_HEIGHT_LOGICAL * SCALE
+HEADER_FONT_SIZE = HEADER_FONT_SIZE_LOGICAL * SCALE
 
 # Primary DejaVu paths (Debian/Ubuntu with fonts-dejavu-core installed), plus a
 # couple of common fallback locations. If none of these exist on the host —
@@ -144,6 +152,25 @@ def _draw_movement(draw, x: int, y: int, row_height: int, movement: str, font) -
     draw.text((text_x, y + (row_height - MOVEMENT_FONT_SIZE) // 2), label, font=font, fill=color)
 
 
+def _draw_header(draw, font) -> None:
+    """Draws a column-label header row (RK / TEAM / MV / REC) above the
+    rankings, in a slightly darker band than the row background so it reads
+    as a header rather than another data row."""
+    draw.rectangle((0, 0, CARD_WIDTH, HEADER_HEIGHT), fill=HEADER_BG_COLOR[:3])
+
+    label_y = (HEADER_HEIGHT - HEADER_FONT_SIZE) // 2
+
+    draw.text((PADDING_X, label_y), "RANK", font=font, fill=HEADER_TEXT_COLOR)
+
+    team_x = PADDING_X + RANK_COL_WIDTH_LOGICAL * SCALE + LOGO_SIZE + LOGO_TO_TEAM_GAP_LOGICAL * SCALE
+    draw.text((team_x, label_y), "TEAM", font=font, fill=HEADER_TEXT_COLOR)
+
+    draw.text((CARD_WIDTH - MOVEMENT_COL_FROM_RIGHT_LOGICAL * SCALE, label_y), "CHANGE", font=font, fill=HEADER_TEXT_COLOR)
+    draw.text((CARD_WIDTH - RECORD_COL_FROM_RIGHT_LOGICAL * SCALE, label_y), "RECORD", font=font, fill=HEADER_TEXT_COLOR)
+
+    draw.line((0, HEADER_HEIGHT, CARD_WIDTH, HEADER_HEIGHT), fill=DIVIDER_COLOR, width=1 * SCALE)
+
+
 async def _fetch_logo(session: aiohttp.ClientSession, url: str) -> Image.Image | None:
     """Returns None on any failure so one bad/missing logo URL doesn't take
     down the whole render — the caller falls back to a blank square for that row."""
@@ -182,7 +209,7 @@ async def build_top25_file(rows: list[dict]) -> discord.File | None:
             for url in logo_urls
         ])
 
-    canvas_height = TOP_PADDING + ROW_HEIGHT * len(rows) + BOTTOM_PADDING
+    canvas_height = HEADER_HEIGHT + TOP_PADDING + ROW_HEIGHT * len(rows) + BOTTOM_PADDING
     canvas = Image.new("RGB", (CARD_WIDTH, canvas_height), CANVAS_BG_COLOR[:3])
     draw = ImageDraw.Draw(canvas)
 
@@ -190,8 +217,11 @@ async def build_top25_file(rows: list[dict]) -> discord.File | None:
     team_font = _load_font(FONT_REGULAR_CANDIDATES, TEAM_FONT_SIZE)
     record_font = _load_font(FONT_REGULAR_CANDIDATES, RECORD_FONT_SIZE)
     movement_font = _load_font(FONT_BOLD_CANDIDATES, MOVEMENT_FONT_SIZE)
+    header_font = _load_font(FONT_BOLD_CANDIDATES, HEADER_FONT_SIZE)
 
-    y = TOP_PADDING
+    _draw_header(draw, header_font)
+
+    y = HEADER_HEIGHT + TOP_PADDING
     for i, row in enumerate(rows):
         x = PADDING_X
         draw.text((x, y + (ROW_HEIGHT - RANK_FONT_SIZE) // 2), f"{row['rank']:>2}", font=rank_font, fill=(200, 202, 205, 255))
