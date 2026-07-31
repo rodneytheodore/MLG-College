@@ -14,6 +14,7 @@ COGS = [
     "cogs.install_offense",
     "cogs.install_defense",
     "cogs.draft",
+    "cogs.top25",
 ]
 
 GUILD_ID = 1207738346424770631  # your server's ID, for instant command sync
