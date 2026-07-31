@@ -30,8 +30,37 @@ TEAM_FONT_SIZE = 15
 RECORD_FONT_SIZE = 13
 MOVEMENT_FONT_SIZE = 13
 
-FONT_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-FONT_REGULAR = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+# Primary DejaVu paths (Debian/Ubuntu with fonts-dejavu-core installed), plus a
+# couple of common fallback locations. If none of these exist on the host —
+# e.g. a slim container image without system fonts — we fall back to PIL's
+# built-in bitmap font rather than crashing the whole render.
+FONT_BOLD_CANDIDATES = [
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+    "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
+]
+FONT_REGULAR_CANDIDATES = [
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+    "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+]
+
+
+def _load_font(candidates: list, size: int):
+    """Tries each candidate TTF path in order; falls back to PIL's built-in
+    default font (fixed size, no anti-aliasing scaling) if none are available
+    on this host, so a missing font package degrades the image rather than
+    crashing the /post_top25 command."""
+    for path in candidates:
+        try:
+            return ImageFont.truetype(path, size)
+        except OSError:
+            continue
+    try:
+        return ImageFont.load_default(size=size)
+    except TypeError:
+        # Older Pillow versions' load_default() doesn't accept a size arg.
+        return ImageFont.load_default()
 
 UP_COLOR = (87, 242, 135, 255)
 DOWN_COLOR = (237, 66, 69, 255)
@@ -91,10 +120,10 @@ async def build_top25_file(rows: list[dict]) -> discord.File | None:
     canvas = Image.new("RGB", (CARD_WIDTH, canvas_height), CANVAS_BG_COLOR[:3])
     draw = ImageDraw.Draw(canvas)
 
-    rank_font = ImageFont.truetype(FONT_BOLD, RANK_FONT_SIZE)
-    team_font = ImageFont.truetype(FONT_REGULAR, TEAM_FONT_SIZE)
-    record_font = ImageFont.truetype(FONT_REGULAR, RECORD_FONT_SIZE)
-    movement_font = ImageFont.truetype(FONT_BOLD, MOVEMENT_FONT_SIZE)
+    rank_font = _load_font(FONT_BOLD_CANDIDATES, RANK_FONT_SIZE)
+    team_font = _load_font(FONT_REGULAR_CANDIDATES, TEAM_FONT_SIZE)
+    record_font = _load_font(FONT_REGULAR_CANDIDATES, RECORD_FONT_SIZE)
+    movement_font = _load_font(FONT_BOLD_CANDIDATES, MOVEMENT_FONT_SIZE)
 
     y = TOP_PADDING
     for i, row in enumerate(rows):
