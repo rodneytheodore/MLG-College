@@ -41,8 +41,8 @@ BOTTOM_PADDING_LOGICAL = 18
 TEAM_FONT_SIZE_LOGICAL = 22
 SCHEME_FONT_SIZE_LOGICAL = 20
 
-LOGO_TO_TEAM_GAP_LOGICAL = 14
-GAP_LOGICAL = 10
+LOGO_TO_TEAM_GAP_LOGICAL = 18
+GAP_LOGICAL = 30
 
 # Floors so a column never looks unnaturally squeezed even when every value
 # in it happens to be short (e.g. every defense scheme this week is "4-3").

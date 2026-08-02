@@ -991,27 +991,15 @@ class SchemeCards(commands.Cog):
 
         settings = load_settings()
         old_channel_id = settings.get("scheme_cards_channel_id")
-        old_message_ids = settings.get("scheme_cards_message_ids")
 
+        # Always purge whatever's currently posted in the old channel --
+        # whether that's the old per-team embeds, a previous image table, or
+        # stray messages -- so this command guarantees a clean rebuild
+        # rather than depending on message IDs having been tracked correctly.
         if old_channel_id:
             old_channel = self.bot.get_channel(old_channel_id)
             if old_channel is not None:
-                if old_message_ids is None:
-                    # First run after upgrading from the old per-team-embed
-                    # format -- nothing's tracked individually yet, so purge
-                    # once as a one-time migration cleanup.
-                    await old_channel.purge(limit=300, check=lambda m: m.author == self.bot.user)
-                else:
-                    # Delete whatever's currently posted instead of
-                    # abandoning it -- otherwise re-running this command
-                    # (especially pointed at a different channel) leaves
-                    # orphaned messages behind.
-                    for msg_id in old_message_ids.values():
-                        try:
-                            old_message = await old_channel.fetch_message(msg_id)
-                            await old_message.delete()
-                        except (discord.NotFound, discord.HTTPException):
-                            pass
+                await old_channel.purge(limit=300, check=lambda m: m.author == self.bot.user)
 
         settings["scheme_cards_channel_id"] = interaction.channel_id
         settings["scheme_cards_message_ids"] = {}
