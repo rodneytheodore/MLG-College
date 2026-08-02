@@ -72,6 +72,7 @@ class Roster(commands.Cog):
             all_rows.extend(rows)
 
         team_col_width, owner_col_width = compute_column_widths(all_rows) if all_rows else (None, None)
+        max_row_count = max((len(rows) for rows in conf_rows.values() if rows), default=0)
 
         for conf_name, rows in conf_rows.items():
             if not rows:
@@ -86,7 +87,9 @@ class Roster(commands.Cog):
                         pass
                 continue
 
-            file = await build_roster_file(rows, team_col_width=team_col_width, owner_col_width=owner_col_width)
+            file = await build_roster_file(
+                rows, team_col_width=team_col_width, owner_col_width=owner_col_width, row_count=max_row_count,
+            )
             embed = discord.Embed(title=conf_name, color=discord.Color.dark_grey())
             if file is not None:
                 embed.set_image(url="attachment://roster.png")

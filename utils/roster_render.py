@@ -158,17 +158,21 @@ def compute_column_widths(rows: list[dict]) -> tuple[int, int]:
     return team_col_width, owner_col_width
 
 
-async def build_roster_file(rows: list[dict], team_col_width: int = None, owner_col_width: int = None) -> discord.File | None:
+async def build_roster_file(rows: list[dict], team_col_width: int = None, owner_col_width: int = None, row_count: int = None) -> discord.File | None:
     """rows: list of dicts with keys team_name (str), owner_name (str), and
     logo_url (str or None). Returns a discord.File ready to attach, or None
     if rows is empty.
 
     team_col_width / owner_col_width: pass these in (from
     compute_column_widths() run across every conference's rows) so every
-    conference's image shares the same column widths and therefore the same
-    overall size. If omitted, columns are sized to fit only this call's
-    rows -- fine for a single image, but conferences will end up different
-    widths from each other."""
+    conference's image shares the same column widths. If omitted, columns
+    are sized to fit only this call's rows.
+
+    row_count: reserve height for this many rows instead of just len(rows)
+    -- pass the largest conference's team count so every conference's image
+    comes out the same height too, padded with blank background below its
+    actual rows, rather than each conference being exactly as tall as its
+    own team count."""
     if not rows:
         return None
 
@@ -197,7 +201,7 @@ async def build_roster_file(rows: list[dict], team_col_width: int = None, owner_
     owner_col_x = team_col_x + team_col_width + GAP
     card_width = owner_col_x + owner_col_width + PADDING_X
 
-    canvas_height = HEADER_HEIGHT + TOP_PADDING + ROW_HEIGHT * len(rows) + BOTTOM_PADDING
+    canvas_height = HEADER_HEIGHT + TOP_PADDING + ROW_HEIGHT * max(row_count or 0, len(rows)) + BOTTOM_PADDING
     canvas = Image.new("RGB", (card_width, canvas_height), CANVAS_BG_COLOR[:3])
     draw = ImageDraw.Draw(canvas)
 
