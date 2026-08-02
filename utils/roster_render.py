@@ -138,10 +138,37 @@ def _draw_header(draw, font, card_width: int, team_x: int, owner_x: int) -> None
     draw.line((0, HEADER_HEIGHT, card_width, HEADER_HEIGHT), fill=DIVIDER_COLOR, width=1 * SCALE)
 
 
-async def build_roster_file(rows: list[dict]) -> discord.File | None:
+def compute_column_widths(rows: list[dict]) -> tuple[int, int]:
+    """Measures TEAM and OWNER column widths across ALL rows passed in
+    (i.e. every conference's claimed teams, not just one), so every
+    conference's image can be built at the same width instead of each
+    being sized independently -- otherwise a conference with a short name
+    like "Miami" ends up visibly narrower than one with "Florida
+    International", making the stack of images look inconsistent."""
+    team_font = _load_font(FONT_BOLD_CANDIDATES, TEAM_FONT_SIZE)
+    owner_font = _load_font(FONT_REGULAR_CANDIDATES, OWNER_FONT_SIZE)
+    header_font = _load_font(FONT_BOLD_CANDIDATES, HEADER_FONT_SIZE)
+    measure_draw = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+
+    team_texts = [row["team_name"] for row in rows]
+    owner_texts = [row.get("owner_name") or "Unknown" for row in rows]
+
+    team_col_width = _col_width(measure_draw, team_texts, team_font, "TEAM", header_font, MIN_TEAM_COL_WIDTH, MAX_TEAM_COL_WIDTH)
+    owner_col_width = _col_width(measure_draw, owner_texts, owner_font, "OWNER", header_font, MIN_OWNER_COL_WIDTH, MAX_OWNER_COL_WIDTH)
+    return team_col_width, owner_col_width
+
+
+async def build_roster_file(rows: list[dict], team_col_width: int = None, owner_col_width: int = None) -> discord.File | None:
     """rows: list of dicts with keys team_name (str), owner_name (str), and
     logo_url (str or None). Returns a discord.File ready to attach, or None
-    if rows is empty."""
+    if rows is empty.
+
+    team_col_width / owner_col_width: pass these in (from
+    compute_column_widths() run across every conference's rows) so every
+    conference's image shares the same column widths and therefore the same
+    overall size. If omitted, columns are sized to fit only this call's
+    rows -- fine for a single image, but conferences will end up different
+    widths from each other."""
     if not rows:
         return None
 
@@ -159,9 +186,12 @@ async def build_roster_file(rows: list[dict]) -> discord.File | None:
     team_texts = [row["team_name"] for row in rows]
     owner_texts = [row.get("owner_name") or "Unknown" for row in rows]
 
-    measure_draw = ImageDraw.Draw(Image.new("RGB", (1, 1)))
-    team_col_width = _col_width(measure_draw, team_texts, team_font, "TEAM", header_font, MIN_TEAM_COL_WIDTH, MAX_TEAM_COL_WIDTH)
-    owner_col_width = _col_width(measure_draw, owner_texts, owner_font, "OWNER", header_font, MIN_OWNER_COL_WIDTH, MAX_OWNER_COL_WIDTH)
+    if team_col_width is None or owner_col_width is None:
+        measure_draw = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+        if team_col_width is None:
+            team_col_width = _col_width(measure_draw, team_texts, team_font, "TEAM", header_font, MIN_TEAM_COL_WIDTH, MAX_TEAM_COL_WIDTH)
+        if owner_col_width is None:
+            owner_col_width = _col_width(measure_draw, owner_texts, owner_font, "OWNER", header_font, MIN_OWNER_COL_WIDTH, MAX_OWNER_COL_WIDTH)
 
     team_col_x = PADDING_X + LOGO_SIZE + LOGO_TO_TEAM_GAP
     owner_col_x = team_col_x + team_col_width + GAP

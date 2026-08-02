@@ -13,7 +13,7 @@ from utils.data import (
     resolve_team,
 )
 from utils.responses import send_ephemeral, send_ephemeral_followup
-from utils.roster_render import build_roster_file
+from utils.roster_render import build_roster_file, compute_column_widths
 from cogs.scheduling import refresh_dashboard
 
 
@@ -44,10 +44,37 @@ class Roster(commands.Cog):
         message_ids = settings.get("roster_message_ids", {})
         updated_ids = {}
 
+        # Build every conference's row list first so column widths can be
+        # measured across ALL claimed teams at once -- otherwise each
+        # conference's image sizes its columns independently and a
+        # short-named conference (e.g. all "Miami"/"Duke") ends up visibly
+        # narrower than one with a long name like "Florida International",
+        # making the stack of images in the channel look inconsistent.
+        conf_rows = {}
+        all_rows = []
         for conf_name, conf_teams in by_conference.items():
-            claimed = [t for t in conf_teams if t["abbr"].upper() in roster]
-
+            claimed = sorted(
+                (t for t in conf_teams if t["abbr"].upper() in roster),
+                key=lambda t: t["name"],
+            )
             if not claimed:
+                conf_rows[conf_name] = []
+                continue
+            rows = [
+                {
+                    "team_name": t["name"],
+                    "owner_name": roster[t["abbr"].upper()].get("username", "Unknown"),
+                    "logo_url": t.get("logoDark") or t.get("logo"),
+                }
+                for t in claimed
+            ]
+            conf_rows[conf_name] = rows
+            all_rows.extend(rows)
+
+        team_col_width, owner_col_width = compute_column_widths(all_rows) if all_rows else (None, None)
+
+        for conf_name, rows in conf_rows.items():
+            if not rows:
                 # No claimed teams left in this conference -- remove its
                 # stale message instead of leaving an outdated image up.
                 old_id = message_ids.get(conf_name)
@@ -59,17 +86,7 @@ class Roster(commands.Cog):
                         pass
                 continue
 
-            claimed.sort(key=lambda t: t["name"])
-            rows = [
-                {
-                    "team_name": t["name"],
-                    "owner_name": roster[t["abbr"].upper()].get("username", "Unknown"),
-                    "logo_url": t.get("logoDark") or t.get("logo"),
-                }
-                for t in claimed
-            ]
-
-            file = await build_roster_file(rows)
+            file = await build_roster_file(rows, team_col_width=team_col_width, owner_col_width=owner_col_width)
             embed = discord.Embed(title=conf_name, color=discord.Color.dark_grey())
             if file is not None:
                 embed.set_image(url="attachment://roster.png")
