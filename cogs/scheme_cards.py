@@ -18,7 +18,7 @@ from utils.data import (
     resolve_team,
     true_display_name,
 )
-from utils.responses import send_ephemeral
+from utils.responses import send_ephemeral, send_ephemeral_followup
 from utils.scheme_cards_render import build_scheme_cards_file
 # NOTE: refresh_dashboard is imported lazily (inside the functions that use
 # it, not here at module level) because cogs.scheduling itself imports from
@@ -989,6 +989,12 @@ class SchemeCards(commands.Cog):
             await send_ephemeral(interaction, "Only admins can do that.")
             return
 
+        # Purging the old channel and rebuilding every conference's image
+        # can easily exceed Discord's 3-second interaction window, so defer
+        # immediately rather than risking "Unknown interaction" (10062) on a
+        # slow purge -- that's what was crashing this command.
+        await interaction.response.defer(ephemeral=True)
+
         settings = load_settings()
         old_channel_id = settings.get("scheme_cards_channel_id")
 
@@ -1005,8 +1011,8 @@ class SchemeCards(commands.Cog):
         settings["scheme_cards_message_ids"] = {}
         save_settings(settings)
 
-        await send_ephemeral(interaction, "This channel is now the live scheme cards display. Building it now...")
         await self.refresh_scheme_cards_channel()
+        await send_ephemeral_followup(interaction, "This channel is now the live scheme cards display.")
 
     @app_commands.command(name="view_scheme_card", description="View a team's scheme card")
     @app_commands.describe(team="Team to view")
