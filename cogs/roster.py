@@ -12,7 +12,8 @@ from utils.data import (
     is_admin,
     resolve_team,
 )
-from utils.responses import send_ephemeral
+from utils.responses import send_ephemeral, send_ephemeral_followup
+from utils.roster_render import build_roster_file
 from cogs.scheduling import refresh_dashboard
 
 
@@ -26,8 +27,9 @@ class Roster(commands.Cog):
     # ---------- Shared display logic ----------
 
     async def refresh_roster_channel(self):
-        """Wipes and rebuilds the roster channel, grouped by conference,
-        showing only currently-claimed teams. Called after any change."""
+        """Edits each conference's roster image in place (tracked by message
+        ID in settings), or sends a new one if none exists yet or the
+        stored message was deleted. Called after any roster change."""
         settings = load_settings()
         channel_id = settings.get("roster_channel_id")
         if not channel_id:
@@ -37,37 +39,81 @@ class Roster(commands.Cog):
         if channel is None:
             return
 
-        # Clear out everything the bot previously posted in this channel
-        await channel.purge(limit=300, check=lambda m: m.author == self.bot.user)
-
         roster = load_roster()
         by_conference = load_teams_by_conference()
+        message_ids = settings.get("roster_message_ids", {})
+        updated_ids = {}
 
         for conf_name, conf_teams in by_conference.items():
             claimed = [t for t in conf_teams if t["abbr"].upper() in roster]
+
             if not claimed:
+                # No claimed teams left in this conference -- remove its
+                # stale message instead of leaving an outdated image up.
+                old_id = message_ids.get(conf_name)
+                if old_id:
+                    try:
+                        old_message = await channel.fetch_message(old_id)
+                        await old_message.delete()
+                    except (discord.NotFound, discord.HTTPException):
+                        pass
                 continue
 
-            await channel.send(f"**{conf_name}**", allowed_mentions=discord.AllowedMentions.none())
+            claimed.sort(key=lambda t: t["name"])
+            rows = [
+                {
+                    "team_name": t["name"],
+                    "owner_name": roster[t["abbr"].upper()].get("username", "Unknown"),
+                    "logo_url": t.get("logoDark") or t.get("logo"),
+                }
+                for t in claimed
+            ]
 
-            for team in claimed:
-                owner_id = roster[team["abbr"].upper()]["user_id"]
-                display_name = team["name"]
-                padded_name = display_name.ljust(31)  # monospace, sized to fit longest full name (Florida International Panthers, 30 chars)
-                embed = discord.Embed(
-                    description=f"`{padded_name}`\n<@{owner_id}>",
-                    color=int(team["color"], 16) if team.get("color") else discord.Color.default(),
-                )
-                logo_url = team.get("logoDark") or team.get("logo")
-                if logo_url:
-                    embed.set_thumbnail(url=logo_url)
-                await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+            file = await build_roster_file(rows)
+            embed = discord.Embed(title=conf_name, color=discord.Color.dark_grey())
+            if file is not None:
+                embed.set_image(url="attachment://roster.png")
+
+            existing_id = message_ids.get(conf_name)
+            message = None
+            if existing_id:
+                try:
+                    message = await channel.fetch_message(existing_id)
+                except (discord.NotFound, discord.HTTPException):
+                    message = None
+
+            if message is not None:
+                edit_kwargs = {"embed": embed}
+                if file is not None:
+                    edit_kwargs["attachments"] = [file]
+                await message.edit(**edit_kwargs)
+                updated_ids[conf_name] = message.id
+            else:
+                send_kwargs = {"embed": embed, "allowed_mentions": discord.AllowedMentions.none()}
+                if file is not None:
+                    send_kwargs["file"] = file
+                new_message = await channel.send(**send_kwargs)
+                updated_ids[conf_name] = new_message.id
+
+        settings["roster_message_ids"] = updated_ids
 
         claimed_count = len(roster)
-        await channel.send(
-            f"**{claimed_count}/32 teams claimed**",
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
+        summary_text = f"**{claimed_count}/32 teams claimed**"
+        summary_id = settings.get("roster_summary_message_id")
+        summary_message = None
+        if summary_id:
+            try:
+                summary_message = await channel.fetch_message(summary_id)
+            except (discord.NotFound, discord.HTTPException):
+                summary_message = None
+
+        if summary_message is not None:
+            await summary_message.edit(content=summary_text)
+        else:
+            new_summary = await channel.send(summary_text, allowed_mentions=discord.AllowedMentions.none())
+            settings["roster_summary_message_id"] = new_summary.id
+
+        save_settings(settings)
 
     # ---------- Commands ----------
 
@@ -77,12 +123,27 @@ class Roster(commands.Cog):
             await send_ephemeral(interaction, "Only admins can do that.")
             return
 
+        # Purging the old channel and rebuilding every conference's image
+        # can exceed Discord's 3-second interaction window, so defer
+        # immediately -- the same fix /post_scheme_cards needed after it hit
+        # "Unknown interaction" (10062) doing this in the wrong order.
+        await interaction.response.defer(ephemeral=True)
+
         settings = load_settings()
+        old_channel_id = settings.get("roster_channel_id")
+
+        if old_channel_id:
+            old_channel = self.bot.get_channel(old_channel_id)
+            if old_channel is not None:
+                await old_channel.purge(limit=300, check=lambda m: m.author == self.bot.user)
+
         settings["roster_channel_id"] = interaction.channel_id
+        settings["roster_message_ids"] = {}
+        settings.pop("roster_summary_message_id", None)
         save_settings(settings)
 
-        await send_ephemeral(interaction, "This channel is now the live roster display. Building it now...")
         await self.refresh_roster_channel()
+        await send_ephemeral_followup(interaction, "This channel is now the live roster display.")
 
     @app_commands.command(name="assign_team", description="Assign a user to a team (admin only)")
     @app_commands.describe(team="Team name or abbreviation, e.g. Georgia or UGA", user="The user to assign")
