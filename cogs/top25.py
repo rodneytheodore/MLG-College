@@ -61,6 +61,16 @@ def _parse_top25_text(text: str, teams: dict) -> tuple[list[dict], list[str]]:
             return [match.group(1), match.group(2), match.group(3), match.group(4)]
         return parts
 
+    # Any of these typed/pasted variants for "no change" get normalized to a
+    # single plain hyphen so the rendered image is consistent regardless of
+    # what dash character a paste happened to use.
+    NO_CHANGE_VARIANTS = {"—", "–", "--", "―", "nc", "no change", "-"}
+
+    def normalize_movement(raw_movement: str) -> str:
+        if raw_movement.strip().lower() in NO_CHANGE_VARIANTS:
+            return "-"
+        return raw_movement
+
     first_token = split_row(lines[0])[0] if split_row(lines[0]) else ""
     if not first_token.isdigit():
         lines = lines[1:]  # drop the header row, e.g. "Rk  Mv  Team  Record  LW"
@@ -84,7 +94,7 @@ def _parse_top25_text(text: str, teams: dict) -> tuple[list[dict], list[str]]:
         team_info = teams[team_abbr]
         rows.append({
             "rank": int(rank_raw),
-            "movement": movement,
+            "movement": normalize_movement(movement),
             "team_name": team_info.get("school") or team_info.get("name"),
             "record": record,
             "logo_url": team_info.get("logoDark") or team_info.get("logo"),
