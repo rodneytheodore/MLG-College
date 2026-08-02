@@ -990,8 +990,31 @@ class SchemeCards(commands.Cog):
             return
 
         settings = load_settings()
+        old_channel_id = settings.get("scheme_cards_channel_id")
+        old_message_ids = settings.get("scheme_cards_message_ids")
+
+        if old_channel_id:
+            old_channel = self.bot.get_channel(old_channel_id)
+            if old_channel is not None:
+                if old_message_ids is None:
+                    # First run after upgrading from the old per-team-embed
+                    # format -- nothing's tracked individually yet, so purge
+                    # once as a one-time migration cleanup.
+                    await old_channel.purge(limit=300, check=lambda m: m.author == self.bot.user)
+                else:
+                    # Delete whatever's currently posted instead of
+                    # abandoning it -- otherwise re-running this command
+                    # (especially pointed at a different channel) leaves
+                    # orphaned messages behind.
+                    for msg_id in old_message_ids.values():
+                        try:
+                            old_message = await old_channel.fetch_message(msg_id)
+                            await old_message.delete()
+                        except (discord.NotFound, discord.HTTPException):
+                            pass
+
         settings["scheme_cards_channel_id"] = interaction.channel_id
-        settings.pop("scheme_cards_message_ids", None)  # force fresh messages in the new channel
+        settings["scheme_cards_message_ids"] = {}
         save_settings(settings)
 
         await send_ephemeral(interaction, "This channel is now the live scheme cards display. Building it now...")
