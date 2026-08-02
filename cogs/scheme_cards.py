@@ -19,6 +19,7 @@ from utils.data import (
     true_display_name,
 )
 from utils.responses import send_ephemeral
+from utils.scheme_cards_render import build_scheme_cards_file
 # NOTE: refresh_dashboard is imported lazily (inside the functions that use
 # it, not here at module level) because cogs.scheduling itself imports from
 # this module at import time (build_compact_scheme_card_embed,
@@ -276,6 +277,43 @@ class ExpandSchemeCardView(discord.ui.View):
         teams = load_teams()
         embed = _build_defense_install_embed(teams.get(self.abbr, {}), install)
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+class SchemeCardsConferenceSelectView(discord.ui.View):
+    """Persistent dropdown shown under a conference's scheme cards table
+    image, letting anyone pick a team to pull up its full scheme card /
+    installs ephemerally — reuses ExpandSchemeCardView's existing buttons
+    rather than duplicating that reveal logic."""
+
+    def __init__(self, conf_name: str, teams: list):
+        super().__init__(timeout=None)
+        self.conf_name = conf_name
+
+        # Discord caps a select at 25 options; conferences bigger than that
+        # (none currently are) would need to be split across multiple
+        # selects, which isn't implemented here.
+        options = [
+            discord.SelectOption(label=t["name"][:100], value=t["abbr"].upper())
+            for t in teams[:25]
+        ]
+        select = discord.ui.Select(
+            placeholder=f"View a {conf_name} team's scheme card / installs...",
+            custom_id=f"scheme_conf_select:{conf_name}",
+            options=options,
+            min_values=1,
+            max_values=1,
+        )
+        select.callback = self._on_select
+        self.add_item(select)
+
+    async def _on_select(self, interaction: discord.Interaction):
+        abbr = interaction.data["values"][0]
+        teams = load_teams()
+        team_name = teams.get(abbr, {}).get("name", abbr)
+        view = ExpandSchemeCardView(abbr=abbr)
+        await interaction.response.send_message(
+            f"**{team_name}** — pick what you'd like to view:", view=view, ephemeral=True,
+        )
 
 
 def build_step_prompt(step_names: list[str], index: int, label: str) -> str:
@@ -695,6 +733,17 @@ class SchemeCards(commands.Cog):
             view = ExpandSchemeCardView(abbr=abbr)
             self.bot.add_view(view)
 
+        by_conference = load_teams_by_conference()
+        for conf_name, conf_teams in by_conference.items():
+            ready = [
+                t for t in conf_teams
+                if cards.get(t["abbr"].upper(), {}).get("offense") and cards.get(t["abbr"].upper(), {}).get("defense")
+            ]
+            if not ready:
+                continue
+            ready.sort(key=lambda t: t["name"])
+            self.bot.add_view(SchemeCardsConferenceSelectView(conf_name, ready))
+
         drafts = load_scheme_card_drafts()
         for draft_key, draft in drafts.items():
             abbr, _, kind = draft_key.rpartition(":")
@@ -725,10 +774,10 @@ class SchemeCards(commands.Cog):
         if channel is None:
             return
 
-        await channel.purge(limit=300, check=lambda m: m.author == self.bot.user)
-
         cards = load_scheme_cards()
         by_conference = load_teams_by_conference()
+        message_ids = settings.get("scheme_cards_message_ids", {})
+        updated_ids = {}
 
         for conf_name, conf_teams in by_conference.items():
             ready = []
@@ -737,16 +786,62 @@ class SchemeCards(commands.Cog):
                 card = cards.get(abbr)
                 if card and card.get("offense") and card.get("defense"):
                     ready.append(team)
+
             if not ready:
+                # No completed cards left in this conference — remove its
+                # stale message (e.g. after a /clear_scheme_card leaves it empty)
+                # instead of leaving an outdated image up.
+                old_id = message_ids.get(conf_name)
+                if old_id:
+                    try:
+                        old_message = await channel.fetch_message(old_id)
+                        await old_message.delete()
+                    except (discord.NotFound, discord.HTTPException):
+                        pass
                 continue
 
-            await channel.send(f"**{conf_name}**", allowed_mentions=discord.AllowedMentions.none())
+            ready.sort(key=lambda t: t["name"])
+            rows = [
+                {
+                    "team_name": t["name"],
+                    "coach_name": cards[t["abbr"].upper()].get("submitted_by"),
+                    "offense_scheme": cards[t["abbr"].upper()]["offense"].get("scheme"),
+                    "defense_scheme": cards[t["abbr"].upper()]["defense"].get("scheme"),
+                    "logo_url": t.get("logoDark") or t.get("logo"),
+                }
+                for t in ready
+            ]
 
-            for team in sorted(ready, key=lambda t: t["name"]):
-                abbr = team["abbr"].upper()
-                embed = build_compact_scheme_card_embed(self.teams[abbr], cards[abbr])
-                view = ExpandSchemeCardView(abbr=abbr)
-                await channel.send(embed=embed, view=view, allowed_mentions=discord.AllowedMentions.none())
+            file = await build_scheme_cards_file(rows)
+            embed = discord.Embed(title=conf_name, color=discord.Color.dark_grey())
+            if file is not None:
+                embed.set_image(url="attachment://scheme_cards.png")
+
+            view = SchemeCardsConferenceSelectView(conf_name, ready)
+
+            existing_id = message_ids.get(conf_name)
+            message = None
+            if existing_id:
+                try:
+                    message = await channel.fetch_message(existing_id)
+                except (discord.NotFound, discord.HTTPException):
+                    message = None
+
+            if message is not None:
+                edit_kwargs = {"embed": embed, "view": view}
+                if file is not None:
+                    edit_kwargs["attachments"] = [file]
+                await message.edit(**edit_kwargs)
+                updated_ids[conf_name] = message.id
+            else:
+                send_kwargs = {"embed": embed, "view": view, "allowed_mentions": discord.AllowedMentions.none()}
+                if file is not None:
+                    send_kwargs["file"] = file
+                new_message = await channel.send(**send_kwargs)
+                updated_ids[conf_name] = new_message.id
+
+        settings["scheme_cards_message_ids"] = updated_ids
+        save_settings(settings)
 
     def resolve_owned_team(self, interaction: discord.Interaction, roster: dict):
         owned = [a for a, info in roster.items() if info.get("user_id") == interaction.user.id]
@@ -896,6 +991,7 @@ class SchemeCards(commands.Cog):
 
         settings = load_settings()
         settings["scheme_cards_channel_id"] = interaction.channel_id
+        settings.pop("scheme_cards_message_ids", None)  # force fresh messages in the new channel
         save_settings(settings)
 
         await send_ephemeral(interaction, "This channel is now the live scheme cards display. Building it now...")
@@ -920,6 +1016,50 @@ class SchemeCards(commands.Cog):
 
     @view_scheme_card.autocomplete("team")
     async def view_scheme_card_team_autocomplete(self, interaction: discord.Interaction, current: str):
+        return await self.team_autocomplete(interaction, current)
+
+    @app_commands.command(name="view_offense_install", description="View a team's offensive install")
+    @app_commands.describe(team="Team to view")
+    async def view_offense_install(self, interaction: discord.Interaction, team: str):
+        abbr, error = resolve_team(team, self.teams)
+        if error:
+            await send_ephemeral(interaction, error)
+            return
+
+        from cogs.install_offense import load_offense_installs
+        installs = load_offense_installs()
+        install = installs.get(abbr)
+        if not install:
+            await send_ephemeral(interaction, f"No offensive install submitted yet for **{self.teams[abbr]['name']}**.")
+            return
+
+        embed = _build_offense_install_embed(self.teams[abbr], install)
+        await interaction.response.send_message(embed=embed)
+
+    @view_offense_install.autocomplete("team")
+    async def view_offense_install_team_autocomplete(self, interaction: discord.Interaction, current: str):
+        return await self.team_autocomplete(interaction, current)
+
+    @app_commands.command(name="view_defense_install", description="View a team's defensive install")
+    @app_commands.describe(team="Team to view")
+    async def view_defense_install(self, interaction: discord.Interaction, team: str):
+        abbr, error = resolve_team(team, self.teams)
+        if error:
+            await send_ephemeral(interaction, error)
+            return
+
+        from cogs.install_defense import load_defense_installs
+        installs = load_defense_installs()
+        install = installs.get(abbr)
+        if not install:
+            await send_ephemeral(interaction, f"No defensive install submitted yet for **{self.teams[abbr]['name']}**.")
+            return
+
+        embed = _build_defense_install_embed(self.teams[abbr], install)
+        await interaction.response.send_message(embed=embed)
+
+    @view_defense_install.autocomplete("team")
+    async def view_defense_install_team_autocomplete(self, interaction: discord.Interaction, current: str):
         return await self.team_autocomplete(interaction, current)
 
     @app_commands.command(
