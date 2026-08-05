@@ -9,7 +9,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from utils.data import load_teams, is_admin, resolve_team
+from utils.data import load_teams, is_admin, resolve_team, load_roster
 from utils.responses import send_ephemeral
 from utils.matchup_image import as_send_kwargs
 from utils.top25_render import build_top25_file
@@ -17,12 +17,18 @@ from utils.top25_render import build_top25_file
 EMBED_COLOR = 0xFFD700  # gold — matches the accent already used for user-game embeds in scheduling.py
 
 
-def _parse_top25_text(text: str, teams: dict) -> tuple[list[dict], list[str]]:
+def _parse_top25_text(text: str, teams: dict, roster: dict = None) -> tuple[list[dict], list[str]]:
     """Parses a pasted rankings table into row dicts. Tolerant of a header row
     ('Rk  Mv  Team  Record  LW'), tab- or multi-space-separated columns, and
     an optional trailing 'Last Week' column (ignored). Returns (rows, errors) —
     lines that don't parse or whose team can't be matched are skipped and
-    reported rather than aborting the whole paste."""
+    reported rather than aborting the whole paste.
+
+    roster: optional {abbr: {"user_id": ..., "username": ...}} from
+    load_roster() — when given, each row gets a "user_controlled" bool so the
+    renderer can flag teams claimed by a user vs. left on CPU."""
+    if roster is None:
+        roster = {}
     rows = []
     errors = []
 
@@ -98,6 +104,7 @@ def _parse_top25_text(text: str, teams: dict) -> tuple[list[dict], list[str]]:
             "team_name": team_info.get("school") or team_info.get("name"),
             "record": record,
             "logo_url": team_info.get("logoDark") or team_info.get("logo"),
+            "user_controlled": team_abbr in roster,
         })
 
     rows.sort(key=lambda r: r["rank"])
@@ -119,7 +126,11 @@ class Top25Modal(discord.ui.Modal, title="Post Top 25 Rankings"):
         self.add_item(self.rankings_input)
 
     async def on_submit(self, interaction: discord.Interaction):
-        rows, errors = _parse_top25_text(self.rankings_input.value, self.cog.teams)
+        # Loaded fresh here (rather than cached on the cog) so a roster change
+        # made after the bot started — a new assignment or vacate — is
+        # reflected immediately in the user-controlled indicator.
+        roster = load_roster()
+        rows, errors = _parse_top25_text(self.rankings_input.value, self.cog.teams, roster)
 
         if not rows:
             message = "Couldn't parse any rankings from that text. Make sure it's tab-separated: `Rank  Movement  Team  Record`."
