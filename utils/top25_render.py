@@ -82,6 +82,41 @@ def _movement_color(movement: str) -> tuple:
     return FLAT_COLOR
 
 
+MOVEMENT_TRIANGLE_SIZE = 9
+MOVEMENT_TRIANGLE_GAP = 4  # space between triangle and the rank-change number
+
+
+def _draw_triangle(draw: ImageDraw.ImageDraw, x: int, y_center: float, size: int, direction: str, color: tuple):
+    """Draws a small filled up- or down-pointing triangle centered vertically
+    at y_center, left edge at x. Used instead of the Unicode ▲/▼ characters
+    because those glyphs are missing from some fonts (e.g. Liberation Sans),
+    which renders as a 'tofu' box on hosts that don't have DejaVu — a shape
+    drawn with polygon() always renders identically regardless of font."""
+    half = size / 2
+    if direction == "up":
+        points = [(x, y_center + half), (x + size, y_center + half), (x + half, y_center - half)]
+    else:
+        points = [(x, y_center - half), (x + size, y_center - half), (x + half, y_center + half)]
+    draw.polygon(points, fill=color)
+
+
+def _draw_movement(draw: ImageDraw.ImageDraw, x: int, y: int, row_height: int, movement: str, font, color: tuple):
+    """Draws the movement column. '▲N' / '▼N' render as a drawn triangle plus
+    the number (numbers are plain ASCII/Latin, safe in any font); '-' and
+    'NEW' are plain text already, so they render fine as-is."""
+    if movement.startswith("▲") or movement.startswith("▼"):
+        direction = "up" if movement.startswith("▲") else "down"
+        number = movement[1:]
+        y_center = y + row_height / 2
+        _draw_triangle(draw, x, y_center, MOVEMENT_TRIANGLE_SIZE, direction, color)
+        num_x = x + MOVEMENT_TRIANGLE_SIZE + MOVEMENT_TRIANGLE_GAP
+        num_y = y + (row_height - MOVEMENT_FONT_SIZE) // 2
+        draw.text((num_x, num_y), number, font=font, fill=color)
+    else:
+        text_y = y + (row_height - MOVEMENT_FONT_SIZE) // 2
+        draw.text((x, text_y), movement, font=font, fill=color)
+
+
 async def _fetch_logo(session: aiohttp.ClientSession, url: str) -> Image.Image | None:
     """Returns None on any failure so one bad/missing logo URL doesn't take
     down the whole render — the caller falls back to a blank square for that row."""
@@ -151,9 +186,8 @@ async def build_top25_file(rows: list[dict]) -> discord.File | None:
             tag_y = y + (ROW_HEIGHT - MOVEMENT_FONT_SIZE) // 2
             draw.text((tag_x, tag_y), USER_TAG_TEXT, font=movement_font, fill=USER_TAG_COLOR)
 
-        movement = row.get("movement", "—")
-        draw.text((CARD_WIDTH - 140, y + (ROW_HEIGHT - MOVEMENT_FONT_SIZE) // 2), movement,
-                   font=movement_font, fill=_movement_color(movement))
+        movement = row.get("movement", "-")
+        _draw_movement(draw, CARD_WIDTH - 140, y, ROW_HEIGHT, movement, movement_font, _movement_color(movement))
 
         record = row.get("record", "")
         draw.text((CARD_WIDTH - 70, y + (ROW_HEIGHT - RECORD_FONT_SIZE) // 2), record,
