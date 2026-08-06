@@ -24,7 +24,8 @@ from utils.data import (
     ADMIN_ROLE_NAME,
 )
 from utils.responses import send_ephemeral
-from utils.matchup_image import build_matchup_file, as_send_kwargs, as_edit_kwargs
+from utils.matchup_image import as_send_kwargs, as_edit_kwargs
+from utils.game_render import build_game_table_file
 from cogs.scheme_cards import build_compact_scheme_card_embed, ExpandSchemeCardView
 
 EASTERN = ZoneInfo("America/New_York")
@@ -983,25 +984,20 @@ async def _do_advance_week(
 
     deadline_line = f"\n**Due:** {deadline}" if deadline else ""
 
-    if cpu_games:
-        if cpu_deadline:
-            await cpu_channel.send(f"📅 **All CPU games due:** {cpu_deadline}")
-        for g in cpu_games:
-            embed, file = await cog.build_game_embed(g, week, roster)
-            view = CompleteGameView(cog=cog, game_id=g["game_id"])
-            send_kwargs = {"embed": embed, "view": view, "allowed_mentions": discord.AllowedMentions.none(), **as_send_kwargs(file)}
-            cpu_msg = await cpu_channel.send(**send_kwargs)
-            g["message_id"] = cpu_msg.id
-    else:
+    if not cpu_games:
         await cpu_channel.send("No CPU games this week.")
 
     if user_games:
         for g in user_games:
-            # Channel embed: matchup logos, no buttons (clean matchup card only)
-            embed, file = await cog.build_game_embed(g, week, roster, deadline=deadline, mention_users=False)
-            send_kwargs = {"embed": embed, "allowed_mentions": discord.AllowedMentions.none(), **as_send_kwargs(file)}
-            game_msg = await user_channel.send(**send_kwargs)
-            thread = await game_msg.create_thread(name=f"{g['away']} vs {g['home']} — Week {week}")
+            # Threads are now created standalone (no parent starter message) --
+            # every game in this channel shares one table image instead of
+            # each getting its own message to spawn a thread from. The image
+            # (posted below via refresh_week_tables) lists each thread as a
+            # clickable mention chip for navigation.
+            thread = await user_channel.create_thread(
+                name=f"{g['away']} vs {g['home']} — Week {week}",
+                type=discord.ChannelType.public_thread,
+            )
             home_owner_id = roster.get(g["home"], {}).get("user_id")
             away_owner_id = roster.get(g["away"], {}).get("user_id")
 
@@ -1011,12 +1007,17 @@ async def _do_advance_week(
             # no set_permissions — so posting rights are controlled by a
             # send_messages_in_threads overwrite on the PARENT channel instead).
 
-            # Buttons live in the thread alongside the ping
+            # Buttons live in the thread alongside the ping. The single-row
+            # table image gives the thread a card up front, instead of only
+            # appearing after the first button click.
             game_view = CompleteGameView(cog=cog, game_id=g["game_id"], show_schedule_button=True)
+            thread_embed, thread_file = await _build_thread_card(cog, g)
             await thread.send(
                 f"<@{away_owner_id}> <@{home_owner_id}> use this thread to schedule your game and report completion.{deadline_line}",
+                embed=thread_embed,
                 view=game_view,
                 allowed_mentions=discord.AllowedMentions(users=True),
+                **as_send_kwargs(thread_file),
             )
 
             scheme_cards_cog = cog.bot.get_cog("SchemeCards")
@@ -1031,7 +1032,6 @@ async def _do_advance_week(
                     await thread.send(embed=card_embed, view=card_view, allowed_mentions=discord.AllowedMentions.none())
 
             g["thread_id"] = thread.id
-            g["message_id"] = game_msg.id
     else:
         await user_channel.send("No user games this week.")
 
@@ -1053,6 +1053,7 @@ async def _do_advance_week(
                 break
 
     save_season(season)
+    await refresh_week_tables(bot, cog, week)
     await refresh_dashboard(bot)
 
     # Clean up the week we just advanced FROM — its channels (and everything posted
@@ -1260,34 +1261,237 @@ async def _delete_channels_for_week(guild, week_data):
     return deleted, errors
 
 
-async def _sync_channel_card(bot, cog, game, week, week_data, roster, relevant_deadline):
-    """User games show their persistent matchup card as a separate message in the
-    parent week-N-user-games channel (tracked via game['message_id']) — the
-    Schedule/Complete buttons live on a different, plain-text message in the thread.
-    Editing the thread's button message alone does NOT update that channel card,
-    which is why scheduled/completed status wasn't showing up there. Call this to
-    sync it explicitly — from the button handlers on every click, and from
-    /refresh_game_thread as a manual backfill for games whose card is already stale
-    from before this fix (their buttons are disabled now, so nothing else can
-    re-trigger a sync on its own).
-    (CPU games don't need this — their embed and buttons already live on the same
-    message, which gets edited directly wherever this is skipped.)"""
-    if game["type"] != "user":
-        return
-    user_channel_id = week_data.get("user_channel_id")
-    channel_msg_id = game.get("message_id")
-    if not user_channel_id or not channel_msg_id:
-        return
-    try:
-        user_channel = bot.get_channel(user_channel_id) or await bot.fetch_channel(user_channel_id)
-        channel_msg = await user_channel.fetch_message(channel_msg_id)
-        channel_embed, file = await cog.build_game_embed(
-            game, week, roster, deadline=relevant_deadline, mention_users=False
+def _status_label(game: dict) -> tuple[str, str]:
+    """Returns (display_label, kind) for a game's status pill. kind is
+    'done' / 'sched' / 'pending', used purely for pill color in the table image."""
+    if game.get("status") == "completed":
+        return "Completed", "done"
+    if game["type"] == "user":
+        return ("Scheduled", "sched") if game.get("scheduled") else ("Not Scheduled", "pending")
+    return "Pending", "pending"
+
+
+def _build_game_row(cog: "Scheduling", game: dict) -> dict:
+    """Builds one row dict for utils.game_render.build_game_table_file()."""
+    home = cog.teams[game["home"]]
+    away = cog.teams[game["away"]]
+    label, kind = _status_label(game)
+    return {
+        "away_name": away.get("school") or away["name"],
+        "away_logo_url": away.get("logoDark") or away.get("logo"),
+        "home_name": home.get("school") or home["name"],
+        "home_logo_url": home.get("logoDark") or home.get("logo"),
+        "status_label": label,
+        "status_kind": kind,
+    }
+
+
+async def _build_thread_card(cog: "Scheduling", game: dict) -> tuple[discord.Embed, discord.File | None]:
+    """Single-row game table image for a game's thread card -- the exact
+    same render function/style as the channel tables (build_game_table_file),
+    just called with a one-item list, so a thread card is guaranteed to look
+    identical to that game's row in the channel table."""
+    row = _build_game_row(cog, game)
+    file = await build_game_table_file([row])
+    embed = discord.Embed(color=0xFFD700)
+    if file is not None:
+        embed.set_image(url="attachment://game_table.png")
+    return embed, file
+
+
+class CpuGameTableView(discord.ui.View):
+    """Persistent 'Mark Game Completed' button shown under the CPU games
+    table image for one week. Clicking it pops an ephemeral picker scoped
+    to whoever clicked: non-admins only see their own pending games; admins
+    see every pending CPU game in that week."""
+
+    def __init__(self, cog: "Scheduling", week: int):
+        super().__init__(timeout=None)
+        self.cog = cog
+        self.week = week
+        btn = discord.ui.Button(
+            label="Mark Game Completed",
+            emoji="✅",
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"cpu_mark_completed:{week}",
         )
-        edit_kwargs = {"embed": channel_embed, **as_edit_kwargs(file)}
-        await channel_msg.edit(**edit_kwargs)
-    except (discord.NotFound, discord.HTTPException, AttributeError):
-        pass
+        btn.callback = self._on_click
+        self.add_item(btn)
+
+    async def _on_click(self, interaction: discord.Interaction):
+        season = load_season()
+        week_data = season.get("weeks", {}).get(str(self.week))
+        if not week_data:
+            await interaction.response.send_message("Couldn't find this week's games anymore.", ephemeral=True)
+            return
+
+        roster = load_roster()
+        admin = is_admin(interaction)
+        pending = []
+        for g in week_data.get("games", []):
+            if g["type"] != "cpu" or g.get("status") == "completed":
+                continue
+            home_owner_id = roster.get(g["home"], {}).get("user_id")
+            away_owner_id = roster.get(g["away"], {}).get("user_id")
+            if not admin and interaction.user.id not in filter(None, (home_owner_id, away_owner_id)):
+                continue
+            pending.append(g)
+
+        if not pending:
+            msg = "No pending CPU games this week." if admin else "You have no pending CPU games this week."
+            await interaction.response.send_message(msg, ephemeral=True)
+            return
+
+        options = [
+            discord.SelectOption(
+                label=f"{self.cog.teams[g['away']]['name']} vs {self.cog.teams[g['home']]['name']}"[:100],
+                value=g["game_id"],
+            )
+            for g in pending[:25]
+        ]
+        select = discord.ui.Select(placeholder="Which game do you want to mark completed?", options=options)
+
+        async def on_select(select_interaction: discord.Interaction):
+            game_id = select_interaction.data["values"][0]
+            season2 = load_season()
+            week2, game2 = find_game_by_id(season2, game_id)
+            if game2 is None:
+                await select_interaction.response.edit_message(content="Couldn't find this game anymore.", view=None)
+                return
+
+            game2["status"] = "completed"
+            save_season(season2)
+
+            away_name = self.cog.teams[game2["away"]]["name"]
+            home_name = self.cog.teams[game2["home"]]["name"]
+            await select_interaction.response.edit_message(
+                content=f"Marked **{away_name} vs {home_name}** completed.", view=None,
+            )
+            await refresh_week_tables(self.cog.bot, self.cog, week2)
+            await refresh_dashboard(self.cog.bot)
+
+        select.callback = on_select
+        picker_view = discord.ui.View(timeout=120)
+        picker_view.add_item(select)
+        await interaction.response.send_message(
+            "Which game do you want to mark completed?", view=picker_view, ephemeral=True,
+        )
+
+
+async def refresh_week_tables(bot: commands.Bot, cog: "Scheduling", week: int) -> None:
+    """Edits the CPU and user games table images for this week in place
+    (tracked via week_data['cpu_channel_message_id'] / ['user_channel_message_id']),
+    or sends fresh ones if none exist yet. Call this after any status change
+    (schedule/complete/team vacated) instead of editing a per-game embed --
+    there isn't one anymore; every game in a channel now shares one image."""
+    season = load_season()
+    week_key = str(week)
+    week_data = season.get("weeks", {}).get(week_key)
+    if not week_data:
+        return
+
+    changed = False
+
+    # --- CPU games table ---
+    cpu_channel_id = week_data.get("cpu_channel_id")
+    cpu_games = [g for g in week_data.get("games", []) if g["type"] == "cpu"]
+    if cpu_channel_id and cpu_games:
+        channel = bot.get_channel(cpu_channel_id)
+        if channel is None:
+            try:
+                channel = await bot.fetch_channel(cpu_channel_id)
+            except (discord.NotFound, discord.HTTPException):
+                channel = None
+        if channel is not None:
+            rows = [_build_game_row(cog, g) for g in cpu_games]
+            file = await build_game_table_file(rows)
+            embed = discord.Embed(title=f"Week {week} — CPU Games", color=discord.Color.dark_grey())
+            cpu_deadline = week_data.get("cpu_deadline")
+            if cpu_deadline:
+                embed.description = f"📅 **All CPU games due:** {cpu_deadline}"
+            if file is not None:
+                embed.set_image(url="attachment://game_table.png")
+            view = CpuGameTableView(cog=cog, week=week)
+
+            existing_id = week_data.get("cpu_channel_message_id")
+            message = None
+            if existing_id:
+                try:
+                    message = await channel.fetch_message(existing_id)
+                except (discord.NotFound, discord.HTTPException):
+                    message = None
+
+            if message is not None:
+                edit_kwargs = {"embed": embed, "view": view}
+                if file is not None:
+                    edit_kwargs["attachments"] = [file]
+                await message.edit(**edit_kwargs)
+            else:
+                send_kwargs = {"embed": embed, "view": view, "allowed_mentions": discord.AllowedMentions.none()}
+                if file is not None:
+                    send_kwargs["file"] = file
+                new_message = await channel.send(**send_kwargs)
+                week_data["cpu_channel_message_id"] = new_message.id
+                changed = True
+
+    # --- User games table (+ thread-mention chips for navigation) ---
+    user_channel_id = week_data.get("user_channel_id")
+    user_games = [g for g in week_data.get("games", []) if g["type"] == "user"]
+    if user_channel_id and user_games:
+        channel = bot.get_channel(user_channel_id)
+        if channel is None:
+            try:
+                channel = await bot.fetch_channel(user_channel_id)
+            except (discord.NotFound, discord.HTTPException):
+                channel = None
+        if channel is not None:
+            rows = [_build_game_row(cog, g) for g in user_games]
+            file = await build_game_table_file(rows)
+            embed = discord.Embed(title=f"Week {week} — User Games", color=0xFFD700)
+            deadline = week_data.get("deadline")
+            if deadline:
+                embed.description = f"📅 **Due:** {deadline}"
+            if file is not None:
+                embed.set_image(url="attachment://game_table.png")
+
+            thread_chips = " ".join(f"<#{g['thread_id']}>" for g in user_games if g.get("thread_id"))
+            if thread_chips:
+                embed.add_field(name="Game Threads", value=thread_chips, inline=False)
+
+            existing_id = week_data.get("user_channel_message_id")
+            message = None
+            if existing_id:
+                try:
+                    message = await channel.fetch_message(existing_id)
+                except (discord.NotFound, discord.HTTPException):
+                    message = None
+
+            if message is not None:
+                edit_kwargs = {"embed": embed}
+                if file is not None:
+                    edit_kwargs["attachments"] = [file]
+                await message.edit(**edit_kwargs)
+            else:
+                send_kwargs = {"embed": embed, "allowed_mentions": discord.AllowedMentions.none()}
+                if file is not None:
+                    send_kwargs["file"] = file
+                new_message = await channel.send(**send_kwargs)
+                week_data["user_channel_message_id"] = new_message.id
+                changed = True
+
+    if changed:
+        season["weeks"][week_key] = week_data
+        save_season(season)
+
+
+async def _sync_channel_card(bot, cog, game, week, week_data, roster, relevant_deadline):
+    """Refreshes this week's shared table image(s) so the status column
+    reflects the latest state. Kept as a thin wrapper around
+    refresh_week_tables() -- with this same name/signature -- so
+    CompleteGameView's button handlers (which call self._sync_channel_card)
+    don't need to change; there's no more per-game channel embed to edit
+    individually, every game in a channel now shares one image."""
+    await refresh_week_tables(bot, cog, week)
 
 
 class CompleteGameView(discord.ui.View):
@@ -1337,7 +1541,7 @@ class CompleteGameView(discord.ui.View):
         week_data = season["weeks"][str(week)]
         relevant_deadline = week_data.get("deadline") if game["type"] == "user" else None
 
-        embed, file = await self.cog.build_game_embed(game, week, roster, deadline=relevant_deadline)
+        embed, file = await _build_thread_card(self.cog, game)
         new_view = CompleteGameView(
             cog=self.cog, game_id=self.game_id,
             completed=(game.get("status") == "completed"), scheduled=True, show_schedule_button=True,
@@ -1360,7 +1564,7 @@ class CompleteGameView(discord.ui.View):
         week_data = season["weeks"][str(week)]
         relevant_deadline = week_data.get("deadline") if game["type"] == "user" else None
 
-        embed, file = await self.cog.build_game_embed(game, week, roster, deadline=relevant_deadline)
+        embed, file = await _build_thread_card(self.cog, game)
         new_view = CompleteGameView(
             cog=self.cog, game_id=self.game_id,
             completed=True, scheduled=game.get("scheduled", False), show_schedule_button=(game["type"] == "user"),
@@ -1438,10 +1642,12 @@ class Scheduling(commands.Cog):
         await self.bot.wait_until_ready()
 
     def register_active_views(self):
-        """Re-registers persistent CompleteGameView buttons for every CPU game
-        in the currently active week that isn't marked completed yet. Must be
-        called once after the bot logs in, since persistent views don't
-        survive a restart on their own."""
+        """Re-registers persistent views for the currently active week: the
+        CPU games table's 'Mark Game Completed' button (one per week, not
+        per game), and CompleteGameView buttons for every user game's
+        thread (unchanged -- those still live one-per-game, inside threads).
+        Must be called once after the bot logs in, since persistent views
+        don't survive a restart on their own."""
         season = load_season()
         current_week = season.get("current_week")
         if current_week is None:
@@ -1451,101 +1657,27 @@ class Scheduling(commands.Cog):
         if not week_data or week_data.get("status") != "active":
             return
 
+        has_cpu_games = any(g["type"] == "cpu" for g in week_data.get("games", []))
+        if has_cpu_games:
+            self.bot.add_view(CpuGameTableView(cog=self, week=current_week))
+
         for g in week_data.get("games", []):
+            if g["type"] != "user":
+                continue
             completed = g.get("status") == "completed"
             scheduled = g.get("scheduled", False)
-            is_user_game = g["type"] == "user"
             view = CompleteGameView(
                 cog=self, game_id=g["game_id"],
-                completed=completed, scheduled=scheduled, show_schedule_button=is_user_game,
+                completed=completed, scheduled=scheduled, show_schedule_button=True,
             )
             self.bot.add_view(view)
 
-    async def build_game_embed(
-        self, game: dict, week: int, roster: dict, deadline: str | None = None,
-        include_image: bool = True, mention_users: bool = True
-    ) -> tuple[discord.Embed, discord.File | None]:
-        """Returns (embed, file). If file is not None, it must be attached to
-        the same message via send(file=file) for the embed's image to render —
-        the embed references it internally as attachment://matchup.png.
-        Pass include_image=False to skip the logo fetch/composite entirely
-        (e.g. when only refreshing text on an embed whose image is unchanged).
-        Pass mention_users=False to use plain usernames instead of @mentions
-        (used for user-game channel embeds, since mentions live in the thread)."""
-        home = self.teams[game["home"]]
-        away = self.teams[game["away"]]
-        home_entry = roster.get(game["home"], {})
-        away_entry = roster.get(game["away"], {})
-        home_owner_id = home_entry.get("user_id")
-        away_owner_id = away_entry.get("user_id")
-        home_username = home_entry.get("username", "Unknown")
-        away_username = away_entry.get("username", "Unknown")
-
-        if game["type"] == "user":
-            if mention_users:
-                description = f"<@{away_owner_id}> vs <@{home_owner_id}>"
-            else:
-                description = f"{away_username} vs {home_username}"
-        else:
-            # CPU games: just tag whichever side has an owner (no "vs CPU" suffix —
-            # it's implied by being in the CPU games channel). Falls back to "CPU vs CPU"
-            # only when neither side is owned, since there's no user to tag at all.
-            if away_owner_id:
-                description = f"<@{away_owner_id}>"
-            elif home_owner_id:
-                description = f"<@{home_owner_id}>"
-            else:
-                description = "CPU vs CPU"
-
-        if game["type"] == "user":
-            color = 0xFFD700
-        elif home_owner_id:
-            color = int(home["color"], 16) if home.get("color") else discord.Color.default()
-        elif away_owner_id:
-            color = int(away["color"], 16) if away.get("color") else discord.Color.default()
-        else:
-            color = discord.Color.default()
-
-        # School name only ("Georgia vs Alabama") — shorter than the full
-        # mascot name ("Georgia Bulldogs vs Alabama Crimson Tide"), for both
-        # CPU and user games.
-        away_title = away.get("school") or away["name"]
-        home_title = home.get("school") or home["name"]
-
-        embed = discord.Embed(
-            title=f"{away_title} vs {home_title}",
-            description=description,
-            color=color,
-        )
-
-        home_logo = home.get("logoDark") or home.get("logo")
-        away_logo = away.get("logoDark") or away.get("logo")
-
-        file = None
-        if include_image and home_logo and away_logo:
-            file = await build_matchup_file(away_logo, home_logo)  # away on left
-
-        if include_image:
-            if file is not None:
-                embed.set_image(url="attachment://matchup.png")
-            elif away_logo:
-                embed.set_thumbnail(url=away_logo)
-
-        footer_text = f"Week {week}"
-        if deadline:
-            footer_text += f"  •  Due: {deadline}"
-        if game["type"] == "user":
-            footer_text += "  •  📅 Scheduled" if game.get("scheduled") else "  •  🕓 Unscheduled"
-        if game.get("status") == "completed":
-            footer_text += "  •  ✅ Completed"
-        embed.set_footer(text=footer_text)
-        return embed, file
-
     async def handle_team_vacated(self, abbr: str):
-        """If the vacated team has a game in the currently active week, clean
-        up the stale embed/thread. A user game with one side now unowned
-        becomes a CPU game (old embed+thread removed, reposted in cpu-games).
-        A CPU game just gets its embed text refreshed in place."""
+        """If the vacated team has a game in the currently active week, update
+        its state and refresh the shared table image(s). A user game with one
+        side now unowned becomes a CPU game (its thread is deleted, since it
+        moves from the user table to the CPU table); a CPU game just needs
+        its row/owner tag refreshed."""
         season = load_season()
         current_week = season.get("current_week")
         if current_week is None:
@@ -1566,50 +1698,21 @@ class Scheduling(commands.Cog):
             new_type = classify_game(g["home"], g["away"], roster)
 
             if g["type"] == "user" and new_type == "cpu":
-                user_channel = self.bot.get_channel(week_data.get("user_channel_id"))
-                cpu_channel = self.bot.get_channel(week_data.get("cpu_channel_id"))
-
                 if g.get("thread_id"):
                     try:
                         thread = self.bot.get_channel(g["thread_id"]) or await self.bot.fetch_channel(g["thread_id"])
                         await thread.delete()
                     except (discord.NotFound, discord.HTTPException):
                         pass
-
-                if user_channel and g.get("message_id"):
-                    try:
-                        old_msg = await user_channel.fetch_message(g["message_id"])
-                        await old_msg.delete()
-                    except (discord.NotFound, discord.HTTPException):
-                        pass
-
                 g["type"] = "cpu"
                 g["thread_id"] = None
-                g["message_id"] = None
-
-                if cpu_channel:
-                    embed, file = await self.build_game_embed(g, current_week, roster)
-                    view = CompleteGameView(cog=self, game_id=g["game_id"])
-                    send_kwargs = {"embed": embed, "view": view, "allowed_mentions": discord.AllowedMentions.none(), **as_send_kwargs(file)}
-                    new_msg = await cpu_channel.send(**send_kwargs)
-                    g["message_id"] = new_msg.id
-
                 changed = True
-
-            elif g["type"] == "cpu" and g.get("message_id"):
-                cpu_channel = self.bot.get_channel(week_data.get("cpu_channel_id"))
-                if cpu_channel:
-                    try:
-                        msg = await cpu_channel.fetch_message(g["message_id"])
-                        embed, file = await self.build_game_embed(g, current_week, roster)
-                        edit_kwargs = {"embed": embed, **as_edit_kwargs(file)}
-                        await msg.edit(**edit_kwargs)
-                    except (discord.NotFound, discord.HTTPException):
-                        pass
-                changed = True
+            elif g["type"] == "cpu":
+                changed = True  # owner tag may have changed; table image needs a refresh
 
         if changed:
             save_season(season)
+            await refresh_week_tables(self.bot, self, current_week)
 
     async def team_autocomplete(self, interaction: discord.Interaction, current: str):
         current_lower = current.lower()
@@ -2101,18 +2204,11 @@ class Scheduling(commands.Cog):
             cpu_channel = await guild.create_text_channel(f"week-{week}-cpu-games", category=scheduling_category)
 
         created_threads = 0
-        posted_cpu = 0
 
-        # --- Backfill any CPU games that never got their post ---
-        for g in cpu_games:
-            if g.get("message_id"):
-                continue
-            embed, file = await self.build_game_embed(g, week, roster)
-            view = CompleteGameView(cog=self, game_id=g["game_id"])
-            send_kwargs = {"embed": embed, "view": view, "allowed_mentions": discord.AllowedMentions.none(), **as_send_kwargs(file)}
-            cpu_msg = await cpu_channel.send(**send_kwargs)
-            g["message_id"] = cpu_msg.id
-            posted_cpu += 1
+        # --- Backfill any CPU games that never got their table posted ---
+        # (refresh_week_tables below handles the actual posting/editing --
+        # nothing needed here anymore since CPU games no longer have their
+        # own individual message to backfill.)
 
         # --- Backfill any user games that never got their thread ---
         scheme_cards_cog = self.bot.get_cog("SchemeCards")
@@ -2121,27 +2217,29 @@ class Scheduling(commands.Cog):
             if existing_thread:
                 continue
 
-            embed, file = await self.build_game_embed(g, week, roster, deadline=deadline, mention_users=False)
-            send_kwargs = {"embed": embed, "allowed_mentions": discord.AllowedMentions.none(), **as_send_kwargs(file)}
-            game_msg = await user_channel.send(**send_kwargs)
-            thread = await game_msg.create_thread(name=f"{g['away']} vs {g['home']} — Week {week}")
+            thread = await user_channel.create_thread(
+                name=f"{g['away']} vs {g['home']} — Week {week}",
+                type=discord.ChannelType.public_thread,
+            )
             home_owner_id = roster.get(g["home"], {}).get("user_id")
             away_owner_id = roster.get(g["away"], {}).get("user_id")
             # Owner thread-posting permissions were already granted above in the single
             # batched edit() call before this loop started.
 
             game_view = CompleteGameView(cog=self, game_id=g["game_id"], show_schedule_button=True)
+            thread_embed, thread_file = await _build_thread_card(self, g)
             await thread.send(
                 f"<@{away_owner_id}> <@{home_owner_id}> use this thread to schedule your game and report completion.{deadline_line}",
+                embed=thread_embed,
                 view=game_view,
                 allowed_mentions=discord.AllowedMentions(users=True),
+                **as_send_kwargs(thread_file),
             )
 
             # Record + save immediately once the thread itself exists, so a failure in the
             # (non-critical) scheme card embed step below can't cause this thread to be
             # recreated as a duplicate on a retry.
             g["thread_id"] = thread.id
-            g["message_id"] = game_msg.id
             created_threads += 1
             week_data["status"] = "active"
             season["weeks"][week_key] = week_data
@@ -2171,6 +2269,7 @@ class Scheduling(commands.Cog):
         # Restore current_week too, in case the crashed advance never got to save it.
         season["current_week"] = week
         save_season(season)
+        await refresh_week_tables(self.bot, self, week)
         await refresh_dashboard(self.bot)
 
         # --- Repost the announcement only if it hasn't gone out for this week yet ---
@@ -2203,7 +2302,6 @@ class Scheduling(commands.Cog):
             f"- User games due: {deadline or '*(none set)*'}",
             f"- CPU games due: {cpu_deadline or '*(none set)*'}",
             f"- New game threads created: {created_threads}",
-            f"- New CPU game posts created: {posted_cpu}",
         ]
         await interaction.followup.send("\n".join(summary), ephemeral=True)
 
@@ -2287,22 +2385,24 @@ class Scheduling(commands.Cog):
 
         created_new_thread = False
         if thread is None:
-            embed, file = await self.build_game_embed(g, week, roster, deadline=deadline, mention_users=False)
-            send_kwargs = {"embed": embed, "allowed_mentions": discord.AllowedMentions.none(), **as_send_kwargs(file)}
-            game_msg = await user_channel.send(**send_kwargs)
-            thread = await game_msg.create_thread(name=f"{g['away']} vs {g['home']} — Week {week}")
+            thread = await user_channel.create_thread(
+                name=f"{g['away']} vs {g['home']} — Week {week}",
+                type=discord.ChannelType.public_thread,
+            )
             g["thread_id"] = thread.id
-            g["message_id"] = game_msg.id
             season["weeks"][week_key] = week_data
             save_season(season)
             created_new_thread = True
 
-        # Repost a fresh buttons message.
+        # Repost a fresh buttons message (with the current card image).
         game_view = CompleteGameView(cog=self, game_id=g["game_id"], show_schedule_button=True)
+        thread_embed, thread_file = await _build_thread_card(self, g)
         await thread.send(
             f"<@{away_owner_id}> <@{home_owner_id}> use this thread to schedule your game and report completion.{deadline_line}",
+            embed=thread_embed,
             view=game_view,
             allowed_mentions=discord.AllowedMentions(users=True),
+            **as_send_kwargs(thread_file),
         )
 
         # Repost fresh scheme card embeds.
