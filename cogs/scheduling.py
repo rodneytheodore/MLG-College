@@ -1,3 +1,4 @@
+import asyncio
 import io
 import re
 
@@ -1378,7 +1379,32 @@ class CpuGameTableView(discord.ui.View):
         )
 
 
+_week_table_locks: dict[int, asyncio.Lock] = {}
+
+
+def _get_week_lock(week: int) -> asyncio.Lock:
+    """One lock per week number, created on first use. Serializes
+    refresh_week_tables() calls for that week so two overlapping triggers
+    (e.g. two button clicks landing close together) can't both read
+    season.json before either has saved, each conclude no table message
+    exists yet, and both send a duplicate."""
+    lock = _week_table_locks.get(week)
+    if lock is None:
+        lock = asyncio.Lock()
+        _week_table_locks[week] = lock
+    return lock
+
+
 async def refresh_week_tables(bot: commands.Bot, cog: "Scheduling", week: int) -> None:
+    """Public entry point -- acquires this week's lock before doing any work,
+    so two overlapping calls (e.g. two button clicks landing close together)
+    can't race each other into posting duplicate table messages. See
+    _get_week_lock() for the failure mode this prevents."""
+    async with _get_week_lock(week):
+        await _refresh_week_tables_impl(bot, cog, week)
+
+
+async def _refresh_week_tables_impl(bot: commands.Bot, cog: "Scheduling", week: int) -> None:
     """Edits the CPU and user games table images for this week in place
     (tracked via week_data['cpu_channel_message_id'] / ['user_channel_message_id']),
     or sends fresh ones if none exist yet. Call this after any status change
