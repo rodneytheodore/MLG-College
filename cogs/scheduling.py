@@ -1053,8 +1053,9 @@ async def _do_advance_week(
                 season["current_week"] = info["week_reset"]
                 break
 
-    save_season(season)
-    await refresh_week_tables(bot, cog, week)
+    async with _get_week_lock(week):
+        save_season(season)
+        await _refresh_week_tables_impl(bot, cog, week)
     await refresh_dashboard(bot)
 
     # Clean up the week we just advanced FROM — its channels (and everything posted
@@ -1354,21 +1355,32 @@ class CpuGameTableView(discord.ui.View):
 
         async def on_select(select_interaction: discord.Interaction):
             game_id = select_interaction.data["values"][0]
+            # Initial unlocked lookup just to find which week this game belongs
+            # to -- read-only, safe. The actual mutation re-fetches fresh once
+            # the lock is held, below.
             season2 = load_season()
             week2, game2 = find_game_by_id(season2, game_id)
             if game2 is None:
                 await select_interaction.response.edit_message(content="Couldn't find this game anymore.", view=None)
                 return
 
-            game2["status"] = "completed"
-            save_season(season2)
+            async with _get_week_lock(week2):
+                season2 = load_season()
+                _, game2 = find_game_by_id(season2, game_id)
+                if game2 is None:
+                    await select_interaction.response.edit_message(content="Couldn't find this game anymore.", view=None)
+                    return
 
-            away_name = self.cog.teams[game2["away"]]["name"]
-            home_name = self.cog.teams[game2["home"]]["name"]
-            await select_interaction.response.edit_message(
-                content=f"Marked **{away_name} vs {home_name}** completed.", view=None,
-            )
-            await refresh_week_tables(self.cog.bot, self.cog, week2)
+                game2["status"] = "completed"
+                save_season(season2)
+
+                away_name = self.cog.teams[game2["away"]]["name"]
+                home_name = self.cog.teams[game2["home"]]["name"]
+                await select_interaction.response.edit_message(
+                    content=f"Marked **{away_name} vs {home_name}** completed.", view=None,
+                )
+                await _refresh_week_tables_impl(self.cog.bot, self.cog, week2)
+
             await refresh_dashboard(self.cog.bot)
 
         select.callback = on_select
@@ -1512,12 +1524,11 @@ async def _refresh_week_tables_impl(bot: commands.Bot, cog: "Scheduling", week: 
 
 async def _sync_channel_card(bot, cog, game, week, week_data, roster, relevant_deadline):
     """Refreshes this week's shared table image(s) so the status column
-    reflects the latest state. Kept as a thin wrapper around
-    refresh_week_tables() -- with this same name/signature -- so
-    CompleteGameView's button handlers (which call self._sync_channel_card)
-    don't need to change; there's no more per-game channel embed to edit
-    individually, every game in a channel now shares one image."""
-    await refresh_week_tables(bot, cog, week)
+    reflects the latest state. Calls the lock-free implementation directly
+    -- every caller of this function now wraps its own mutate+save+refresh
+    sequence in async with _get_week_lock(week) itself, so acquiring the
+    lock again here would deadlock (asyncio.Lock isn't reentrant)."""
+    await _refresh_week_tables_impl(bot, cog, week)
 
 
 class CompleteGameView(discord.ui.View):
@@ -1559,22 +1570,34 @@ class CompleteGameView(discord.ui.View):
         result = await _load_authorized_game(interaction, self.game_id)
         if result is None:
             return
-        season, week, game, roster = result
+        _, week, _, _ = result
 
-        game["scheduled"] = True
-        save_season(season)
+        async with _get_week_lock(week):
+            # Re-fetch fresh now that the lock is held, rather than trusting
+            # the copy _load_authorized_game read before we had it -- another
+            # locked operation could have changed things while we waited.
+            season = load_season()
+            _, game = find_game_by_id(season, self.game_id)
+            if game is None:
+                await interaction.response.send_message("Couldn't find this game anymore.", ephemeral=True)
+                return
+            roster = load_roster()
 
-        week_data = season["weeks"][str(week)]
-        relevant_deadline = week_data.get("deadline") if game["type"] == "user" else None
+            game["scheduled"] = True
+            save_season(season)
 
-        embed, file = await _build_thread_card(self.cog, game)
-        new_view = CompleteGameView(
-            cog=self.cog, game_id=self.game_id,
-            completed=(game.get("status") == "completed"), scheduled=True, show_schedule_button=True,
-        )
-        edit_kwargs = {"embed": embed, "view": new_view, **as_edit_kwargs(file)}
-        await interaction.response.edit_message(**edit_kwargs)
-        await self._sync_channel_card(game, week, week_data, roster, relevant_deadline)
+            week_data = season["weeks"][str(week)]
+            relevant_deadline = week_data.get("deadline") if game["type"] == "user" else None
+
+            embed, file = await _build_thread_card(self.cog, game)
+            new_view = CompleteGameView(
+                cog=self.cog, game_id=self.game_id,
+                completed=(game.get("status") == "completed"), scheduled=True, show_schedule_button=True,
+            )
+            edit_kwargs = {"embed": embed, "view": new_view, **as_edit_kwargs(file)}
+            await interaction.response.edit_message(**edit_kwargs)
+            await self._sync_channel_card(game, week, week_data, roster, relevant_deadline)
+
         await refresh_dashboard(self.cog.bot)
         await interaction.followup.send("📅 Marked as scheduled.", ephemeral=True)
 
@@ -1582,37 +1605,46 @@ class CompleteGameView(discord.ui.View):
         result = await _load_authorized_game(interaction, self.game_id)
         if result is None:
             return
-        season, week, game, roster = result
+        _, week, _, _ = result
 
-        game["status"] = "completed"
-        save_season(season)
+        async with _get_week_lock(week):
+            season = load_season()
+            _, game = find_game_by_id(season, self.game_id)
+            if game is None:
+                await interaction.response.send_message("Couldn't find this game anymore.", ephemeral=True)
+                return
+            roster = load_roster()
 
-        week_data = season["weeks"][str(week)]
-        relevant_deadline = week_data.get("deadline") if game["type"] == "user" else None
-
-        embed, file = await _build_thread_card(self.cog, game)
-        new_view = CompleteGameView(
-            cog=self.cog, game_id=self.game_id,
-            completed=True, scheduled=game.get("scheduled", False), show_schedule_button=(game["type"] == "user"),
-        )
-        edit_kwargs = {"embed": embed, "view": new_view, **as_edit_kwargs(file)}
-        await interaction.response.edit_message(**edit_kwargs)
-        await self._sync_channel_card(game, week, week_data, roster, relevant_deadline)
-        await refresh_dashboard(self.cog.bot)
-
-        if game["type"] == "user" and game.get("thread_id"):
-            thread_id = game["thread_id"]
-            try:
-                thread = self.cog.bot.get_channel(thread_id) or await self.cog.bot.fetch_channel(thread_id)
-                await thread.send("✅ This game has been marked completed. This thread will be deleted in 5 minutes.")
-            except (discord.NotFound, discord.HTTPException):
-                pass
-
-            # Persist the deletion time so it survives a bot restart — the
-            # background cleanup_threads loop picks this up, not an in-memory timer.
-            delete_at = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()
-            game["thread_delete_at"] = delete_at
+            game["status"] = "completed"
             save_season(season)
+
+            week_data = season["weeks"][str(week)]
+            relevant_deadline = week_data.get("deadline") if game["type"] == "user" else None
+
+            embed, file = await _build_thread_card(self.cog, game)
+            new_view = CompleteGameView(
+                cog=self.cog, game_id=self.game_id,
+                completed=True, scheduled=game.get("scheduled", False), show_schedule_button=(game["type"] == "user"),
+            )
+            edit_kwargs = {"embed": embed, "view": new_view, **as_edit_kwargs(file)}
+            await interaction.response.edit_message(**edit_kwargs)
+            await self._sync_channel_card(game, week, week_data, roster, relevant_deadline)
+
+            if game["type"] == "user" and game.get("thread_id"):
+                thread_id = game["thread_id"]
+                try:
+                    thread = self.cog.bot.get_channel(thread_id) or await self.cog.bot.fetch_channel(thread_id)
+                    await thread.send("✅ This game has been marked completed. This thread will be deleted in 5 minutes.")
+                except (discord.NotFound, discord.HTTPException):
+                    pass
+
+                # Persist the deletion time so it survives a bot restart — the
+                # background cleanup_threads loop picks this up, not an in-memory timer.
+                delete_at = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()
+                game["thread_delete_at"] = delete_at
+                save_season(season)
+
+        await refresh_dashboard(self.cog.bot)
 
 
 
@@ -1704,41 +1736,44 @@ class Scheduling(commands.Cog):
         side now unowned becomes a CPU game (its thread is deleted, since it
         moves from the user table to the CPU table); a CPU game just needs
         its row/owner tag refreshed."""
+        # Read-only peek just to find current_week -- safe unlocked.
         season = load_season()
         current_week = season.get("current_week")
         if current_week is None:
             return
 
-        week_key = str(current_week)
-        week_data = season.get("weeks", {}).get(week_key)
-        if not week_data or week_data.get("status") != "active":
-            return
+        async with _get_week_lock(current_week):
+            season = load_season()
+            week_key = str(current_week)
+            week_data = season.get("weeks", {}).get(week_key)
+            if not week_data or week_data.get("status") != "active":
+                return
 
-        roster = load_roster()
-        changed = False
+            roster = load_roster()
+            changed = False
 
-        for g in week_data.get("games", []):
-            if abbr not in (g["home"], g["away"]):
-                continue
+            for g in week_data.get("games", []):
+                if abbr not in (g["home"], g["away"]):
+                    continue
 
-            new_type = classify_game(g["home"], g["away"], roster)
+                new_type = classify_game(g["home"], g["away"], roster)
 
-            if g["type"] == "user" and new_type == "cpu":
-                if g.get("thread_id"):
-                    try:
-                        thread = self.bot.get_channel(g["thread_id"]) or await self.bot.fetch_channel(g["thread_id"])
-                        await thread.delete()
-                    except (discord.NotFound, discord.HTTPException):
-                        pass
-                g["type"] = "cpu"
-                g["thread_id"] = None
-                changed = True
-            elif g["type"] == "cpu":
-                changed = True  # owner tag may have changed; table image needs a refresh
+                if g["type"] == "user" and new_type == "cpu":
+                    if g.get("thread_id"):
+                        try:
+                            thread = self.bot.get_channel(g["thread_id"]) or await self.bot.fetch_channel(g["thread_id"])
+                            await thread.delete()
+                        except (discord.NotFound, discord.HTTPException):
+                            pass
+                    g["type"] = "cpu"
+                    g["thread_id"] = None
+                    changed = True
+                elif g["type"] == "cpu":
+                    changed = True  # owner tag may have changed; table image needs a refresh
 
-        if changed:
-            save_season(season)
-            await refresh_week_tables(self.bot, self, current_week)
+            if changed:
+                save_season(season)
+                await _refresh_week_tables_impl(self.bot, self, current_week)
 
     async def team_autocomplete(self, interaction: discord.Interaction, current: str):
         current_lower = current.lower()
@@ -2143,184 +2178,185 @@ class Scheduling(commands.Cog):
             await interaction.followup.send(f"No staged games found for Week {week}.", ephemeral=True)
             return
 
-        guild = interaction.guild
-        roster = load_roster()
+        async with _get_week_lock(week):
+            guild = interaction.guild
+            roster = load_roster()
 
-        scheduling_category = discord.utils.find(
-            lambda c: isinstance(c, discord.CategoryChannel) and c.name.lower() == "scheduling",
-            guild.channels,
-        )
-        if scheduling_category is None:
-            await interaction.followup.send(
-                "❌ No **Scheduling** category found in this server.", ephemeral=True,
+            scheduling_category = discord.utils.find(
+                lambda c: isinstance(c, discord.CategoryChannel) and c.name.lower() == "scheduling",
+                guild.channels,
             )
-            return
-
-        user_games = [g for g in week_data["games"] if g["type"] == "user"]
-        cpu_games = [g for g in week_data["games"] if g["type"] == "cpu"]
-        # Use whatever was already saved, but let the admin override/backfill it —
-        # weeks that crashed under an older build may never have had a deadline saved.
-        deadline = deadline or week_data.get("deadline")
-        cpu_deadline = cpu_deadline or week_data.get("cpu_deadline")
-        if deadline != week_data.get("deadline") or cpu_deadline != week_data.get("cpu_deadline"):
-            week_data["deadline"] = deadline
-            week_data["cpu_deadline"] = cpu_deadline
-            season["weeks"][week_key] = week_data
-            save_season(season)
-        deadline_line = f"\n**Due:** {deadline}" if deadline else ""
-
-        # --- Locate or create the week's channels (reuse existing ones instead of duplicating) ---
-        admin_role = discord.utils.get(guild.roles, name=ADMIN_ROLE_NAME)
-        user_channel = None
-        if week_data.get("user_channel_id"):
-            user_channel = guild.get_channel(week_data["user_channel_id"])
-        if user_channel is None:
-            user_channel = discord.utils.get(scheduling_category.text_channels, name=f"week-{week}-user-games")
-        if user_channel is None and user_games:
-            user_overwrites = {
-                guild.default_role: discord.PermissionOverwrite(
-                    view_channel=True, read_message_history=True,
-                    send_messages=False, send_messages_in_threads=False,
-                ),
-                guild.me: discord.PermissionOverwrite(
-                    send_messages=True, send_messages_in_threads=True,
-                    manage_messages=True, manage_threads=True,
-                ),
-            }
-            if admin_role:
-                user_overwrites[admin_role] = discord.PermissionOverwrite(
-                    send_messages_in_threads=True, use_application_commands=True, manage_threads=True,
+            if scheduling_category is None:
+                await interaction.followup.send(
+                    "❌ No **Scheduling** category found in this server.", ephemeral=True,
                 )
-            user_channel = await guild.create_text_channel(
-                f"week-{week}-user-games", category=scheduling_category, overwrites=user_overwrites,
-            )
+                return
 
-        if user_channel is not None:
-            # Backfill the @Admin overwrite and any missing game owners' overwrites in
-            # ONE edit() call, rather than one set_permissions() PUT per member. Doing
-            # it per-member in a loop hits Discord's per-channel permission-edit rate
-            # limit once a week has more than a handful of user games.
-            new_overwrites = dict(user_channel.overwrites)
-            changed = False
-            if admin_role and new_overwrites.get(admin_role) != discord.PermissionOverwrite(
-                send_messages_in_threads=True, use_application_commands=True, manage_threads=True,
-            ):
-                new_overwrites[admin_role] = discord.PermissionOverwrite(
-                    send_messages_in_threads=True, use_application_commands=True, manage_threads=True,
-                )
-                changed = True
-            owner_overwrite = discord.PermissionOverwrite(send_messages_in_threads=True, use_application_commands=True)
-            for g in user_games:
-                if g.get("thread_id") and guild.get_channel_or_thread(g["thread_id"]):
-                    continue  # thread already exists; owners already have access
-                for uid in filter(None, (roster.get(g["home"], {}).get("user_id"), roster.get(g["away"], {}).get("user_id"))):
-                    member = guild.get_member(uid)
-                    if member and new_overwrites.get(member) != owner_overwrite:
-                        new_overwrites[member] = owner_overwrite
-                        changed = True
-            if changed:
-                await user_channel.edit(overwrites=new_overwrites)
-
-        cpu_channel = None
-        if week_data.get("cpu_channel_id"):
-            cpu_channel = guild.get_channel(week_data["cpu_channel_id"])
-        if cpu_channel is None:
-            cpu_channel = discord.utils.get(scheduling_category.text_channels, name=f"week-{week}-cpu-games")
-        if cpu_channel is None and cpu_games:
-            cpu_channel = await guild.create_text_channel(f"week-{week}-cpu-games", category=scheduling_category)
-
-        created_threads = 0
-
-        # --- Backfill any CPU games that never got their table posted ---
-        # (refresh_week_tables below handles the actual posting/editing --
-        # nothing needed here anymore since CPU games no longer have their
-        # own individual message to backfill.)
-
-        # --- Backfill any user games that never got their thread ---
-        scheme_cards_cog = self.bot.get_cog("SchemeCards")
-        for g in user_games:
-            existing_thread = guild.get_channel_or_thread(g["thread_id"]) if g.get("thread_id") else None
-            if existing_thread:
-                continue
-
-            thread = await user_channel.create_thread(
-                name=f"{g['away']} vs {g['home']} — Week {week}",
-                type=discord.ChannelType.public_thread,
-            )
-            home_owner_id = roster.get(g["home"], {}).get("user_id")
-            away_owner_id = roster.get(g["away"], {}).get("user_id")
-            # Owner thread-posting permissions were already granted above in the single
-            # batched edit() call before this loop started.
-
-            game_view = CompleteGameView(cog=self, game_id=g["game_id"], show_schedule_button=True)
-            thread_embed, thread_file = await _build_thread_card(self, g)
-            await thread.send(
-                f"<@{away_owner_id}> <@{home_owner_id}> use this thread to schedule your game and report completion.{deadline_line}",
-                embed=thread_embed,
-                view=game_view,
-                allowed_mentions=discord.AllowedMentions(users=True),
-                **as_send_kwargs(thread_file),
-            )
-
-            # Record + save immediately once the thread itself exists, so a failure in the
-            # (non-critical) scheme card embed step below can't cause this thread to be
-            # recreated as a duplicate on a retry.
-            g["thread_id"] = thread.id
-            created_threads += 1
-            week_data["status"] = "active"
-            season["weeks"][week_key] = week_data
-            season["current_week"] = week
-            save_season(season)
-
-            if scheme_cards_cog is not None:
-                all_cards = load_scheme_cards()
-                for team_abbr in (g["home"], g["away"]):
-                    team_card = all_cards.get(team_abbr)
-                    if not team_card or (not team_card.get("offense") and not team_card.get("defense")):
-                        continue
-                    try:
-                        card_embed = build_compact_scheme_card_embed(scheme_cards_cog.teams[team_abbr], team_card)
-                        card_view = ExpandSchemeCardView(abbr=team_abbr)
-                        await thread.send(embed=card_embed, view=card_view, allowed_mentions=discord.AllowedMentions.none())
-                    except Exception as e:
-                        print(f"[repost_week] Failed to post scheme card for {team_abbr} in thread {thread.id}: {e}")
-
-        # --- Persist any channel/thread IDs we just filled in ---
-        week_data["status"] = "active"
-        if user_channel:
-            week_data["user_channel_id"] = user_channel.id
-        if cpu_channel:
-            week_data["cpu_channel_id"] = cpu_channel.id
-        season["weeks"][week_key] = week_data
-        # Restore current_week too, in case the crashed advance never got to save it.
-        season["current_week"] = week
-        save_season(season)
-        await refresh_week_tables(self.bot, self, week)
-        await refresh_dashboard(self.bot)
-
-        # --- Repost the announcement only if it hasn't gone out for this week yet ---
-        reposted_announcement = False
-        if not week_data.get("announcement_posted"):
-            ann_channel = discord.utils.find(
-                lambda c: c.name.lower() in ("announcements", "announcement"),
-                guild.text_channels,
-            )
-            if ann_channel:
-                message_text = get_announcement_message(
-                    current_phase=season.get("current_stage", "preseason"),
-                    new_phase=None,
-                    week=week,
-                    deadline=deadline,
-                    cpu_deadline=cpu_deadline,
-                )
-                await ann_channel.send(
-                    f"{find_mlg_mention(guild)} {message_text}".strip(),
-                    allowed_mentions=discord.AllowedMentions(roles=True),
-                )
-                week_data["announcement_posted"] = True
+            user_games = [g for g in week_data["games"] if g["type"] == "user"]
+            cpu_games = [g for g in week_data["games"] if g["type"] == "cpu"]
+            # Use whatever was already saved, but let the admin override/backfill it —
+            # weeks that crashed under an older build may never have had a deadline saved.
+            deadline = deadline or week_data.get("deadline")
+            cpu_deadline = cpu_deadline or week_data.get("cpu_deadline")
+            if deadline != week_data.get("deadline") or cpu_deadline != week_data.get("cpu_deadline"):
+                week_data["deadline"] = deadline
+                week_data["cpu_deadline"] = cpu_deadline
                 season["weeks"][week_key] = week_data
                 save_season(season)
-                reposted_announcement = True
+            deadline_line = f"\n**Due:** {deadline}" if deadline else ""
+
+            # --- Locate or create the week's channels (reuse existing ones instead of duplicating) ---
+            admin_role = discord.utils.get(guild.roles, name=ADMIN_ROLE_NAME)
+            user_channel = None
+            if week_data.get("user_channel_id"):
+                user_channel = guild.get_channel(week_data["user_channel_id"])
+            if user_channel is None:
+                user_channel = discord.utils.get(scheduling_category.text_channels, name=f"week-{week}-user-games")
+            if user_channel is None and user_games:
+                user_overwrites = {
+                    guild.default_role: discord.PermissionOverwrite(
+                        view_channel=True, read_message_history=True,
+                        send_messages=False, send_messages_in_threads=False,
+                    ),
+                    guild.me: discord.PermissionOverwrite(
+                        send_messages=True, send_messages_in_threads=True,
+                        manage_messages=True, manage_threads=True,
+                    ),
+                }
+                if admin_role:
+                    user_overwrites[admin_role] = discord.PermissionOverwrite(
+                        send_messages_in_threads=True, use_application_commands=True, manage_threads=True,
+                    )
+                user_channel = await guild.create_text_channel(
+                    f"week-{week}-user-games", category=scheduling_category, overwrites=user_overwrites,
+                )
+
+            if user_channel is not None:
+                # Backfill the @Admin overwrite and any missing game owners' overwrites in
+                # ONE edit() call, rather than one set_permissions() PUT per member. Doing
+                # it per-member in a loop hits Discord's per-channel permission-edit rate
+                # limit once a week has more than a handful of user games.
+                new_overwrites = dict(user_channel.overwrites)
+                changed = False
+                if admin_role and new_overwrites.get(admin_role) != discord.PermissionOverwrite(
+                    send_messages_in_threads=True, use_application_commands=True, manage_threads=True,
+                ):
+                    new_overwrites[admin_role] = discord.PermissionOverwrite(
+                        send_messages_in_threads=True, use_application_commands=True, manage_threads=True,
+                    )
+                    changed = True
+                owner_overwrite = discord.PermissionOverwrite(send_messages_in_threads=True, use_application_commands=True)
+                for g in user_games:
+                    if g.get("thread_id") and guild.get_channel_or_thread(g["thread_id"]):
+                        continue  # thread already exists; owners already have access
+                    for uid in filter(None, (roster.get(g["home"], {}).get("user_id"), roster.get(g["away"], {}).get("user_id"))):
+                        member = guild.get_member(uid)
+                        if member and new_overwrites.get(member) != owner_overwrite:
+                            new_overwrites[member] = owner_overwrite
+                            changed = True
+                if changed:
+                    await user_channel.edit(overwrites=new_overwrites)
+
+            cpu_channel = None
+            if week_data.get("cpu_channel_id"):
+                cpu_channel = guild.get_channel(week_data["cpu_channel_id"])
+            if cpu_channel is None:
+                cpu_channel = discord.utils.get(scheduling_category.text_channels, name=f"week-{week}-cpu-games")
+            if cpu_channel is None and cpu_games:
+                cpu_channel = await guild.create_text_channel(f"week-{week}-cpu-games", category=scheduling_category)
+
+            created_threads = 0
+
+            # --- Backfill any CPU games that never got their table posted ---
+            # (refresh_week_tables below handles the actual posting/editing --
+            # nothing needed here anymore since CPU games no longer have their
+            # own individual message to backfill.)
+
+            # --- Backfill any user games that never got their thread ---
+            scheme_cards_cog = self.bot.get_cog("SchemeCards")
+            for g in user_games:
+                existing_thread = guild.get_channel_or_thread(g["thread_id"]) if g.get("thread_id") else None
+                if existing_thread:
+                    continue
+
+                thread = await user_channel.create_thread(
+                    name=f"{g['away']} vs {g['home']} — Week {week}",
+                    type=discord.ChannelType.public_thread,
+                )
+                home_owner_id = roster.get(g["home"], {}).get("user_id")
+                away_owner_id = roster.get(g["away"], {}).get("user_id")
+                # Owner thread-posting permissions were already granted above in the single
+                # batched edit() call before this loop started.
+
+                game_view = CompleteGameView(cog=self, game_id=g["game_id"], show_schedule_button=True)
+                thread_embed, thread_file = await _build_thread_card(self, g)
+                await thread.send(
+                    f"<@{away_owner_id}> <@{home_owner_id}> use this thread to schedule your game and report completion.{deadline_line}",
+                    embed=thread_embed,
+                    view=game_view,
+                    allowed_mentions=discord.AllowedMentions(users=True),
+                    **as_send_kwargs(thread_file),
+                )
+
+                # Record + save immediately once the thread itself exists, so a failure in the
+                # (non-critical) scheme card embed step below can't cause this thread to be
+                # recreated as a duplicate on a retry.
+                g["thread_id"] = thread.id
+                created_threads += 1
+                week_data["status"] = "active"
+                season["weeks"][week_key] = week_data
+                season["current_week"] = week
+                save_season(season)
+
+                if scheme_cards_cog is not None:
+                    all_cards = load_scheme_cards()
+                    for team_abbr in (g["home"], g["away"]):
+                        team_card = all_cards.get(team_abbr)
+                        if not team_card or (not team_card.get("offense") and not team_card.get("defense")):
+                            continue
+                        try:
+                            card_embed = build_compact_scheme_card_embed(scheme_cards_cog.teams[team_abbr], team_card)
+                            card_view = ExpandSchemeCardView(abbr=team_abbr)
+                            await thread.send(embed=card_embed, view=card_view, allowed_mentions=discord.AllowedMentions.none())
+                        except Exception as e:
+                            print(f"[repost_week] Failed to post scheme card for {team_abbr} in thread {thread.id}: {e}")
+
+            # --- Persist any channel/thread IDs we just filled in ---
+            week_data["status"] = "active"
+            if user_channel:
+                week_data["user_channel_id"] = user_channel.id
+            if cpu_channel:
+                week_data["cpu_channel_id"] = cpu_channel.id
+            season["weeks"][week_key] = week_data
+            # Restore current_week too, in case the crashed advance never got to save it.
+            season["current_week"] = week
+            save_season(season)
+            await _refresh_week_tables_impl(self.bot, self, week)
+            await refresh_dashboard(self.bot)
+
+            # --- Repost the announcement only if it hasn't gone out for this week yet ---
+            reposted_announcement = False
+            if not week_data.get("announcement_posted"):
+                ann_channel = discord.utils.find(
+                    lambda c: c.name.lower() in ("announcements", "announcement"),
+                    guild.text_channels,
+                )
+                if ann_channel:
+                    message_text = get_announcement_message(
+                        current_phase=season.get("current_stage", "preseason"),
+                        new_phase=None,
+                        week=week,
+                        deadline=deadline,
+                        cpu_deadline=cpu_deadline,
+                    )
+                    await ann_channel.send(
+                        f"{find_mlg_mention(guild)} {message_text}".strip(),
+                        allowed_mentions=discord.AllowedMentions(roles=True),
+                    )
+                    week_data["announcement_posted"] = True
+                    season["weeks"][week_key] = week_data
+                    save_season(season)
+                    reposted_announcement = True
 
         summary = [
             f"✅ Repost complete for **Week {week}**.",
@@ -2349,110 +2385,111 @@ class Scheduling(commands.Cog):
             await interaction.followup.send("That game wasn't found among this week's user games.", ephemeral=True)
             return
 
-        week_key = str(week)
-        week_data = season["weeks"][week_key]
-        guild = interaction.guild
-        roster = load_roster()
+        async with _get_week_lock(week):
+            week_key = str(week)
+            week_data = season["weeks"][week_key]
+            guild = interaction.guild
+            roster = load_roster()
 
-        scheduling_category = discord.utils.find(
-            lambda c: isinstance(c, discord.CategoryChannel) and c.name.lower() == "scheduling",
-            guild.channels,
-        )
-        user_channel = None
-        if week_data.get("user_channel_id"):
-            user_channel = guild.get_channel(week_data["user_channel_id"])
-        if user_channel is None and scheduling_category is not None:
-            user_channel = discord.utils.get(scheduling_category.text_channels, name=f"week-{week}-user-games")
-        if user_channel is None:
-            await interaction.followup.send(
-                "Couldn't find this week's user-games channel. Try `/repost_week` first to recreate it.",
-                ephemeral=True,
+            scheduling_category = discord.utils.find(
+                lambda c: isinstance(c, discord.CategoryChannel) and c.name.lower() == "scheduling",
+                guild.channels,
             )
-            return
+            user_channel = None
+            if week_data.get("user_channel_id"):
+                user_channel = guild.get_channel(week_data["user_channel_id"])
+            if user_channel is None and scheduling_category is not None:
+                user_channel = discord.utils.get(scheduling_category.text_channels, name=f"week-{week}-user-games")
+            if user_channel is None:
+                await interaction.followup.send(
+                    "Couldn't find this week's user-games channel. Try `/repost_week` first to recreate it.",
+                    ephemeral=True,
+                )
+                return
 
-        if week_data.get("user_channel_id") != user_channel.id:
-            week_data["user_channel_id"] = user_channel.id
-            season["weeks"][week_key] = week_data
-            save_season(season)
+            if week_data.get("user_channel_id") != user_channel.id:
+                week_data["user_channel_id"] = user_channel.id
+                season["weeks"][week_key] = week_data
+                save_season(season)
 
-        admin_role = discord.utils.get(guild.roles, name=ADMIN_ROLE_NAME)
-        home_owner_id = roster.get(g["home"], {}).get("user_id")
-        away_owner_id = roster.get(g["away"], {}).get("user_id")
-        deadline = week_data.get("deadline")
-        deadline_line = f"\n**Due:** {deadline}" if deadline else ""
+            admin_role = discord.utils.get(guild.roles, name=ADMIN_ROLE_NAME)
+            home_owner_id = roster.get(g["home"], {}).get("user_id")
+            away_owner_id = roster.get(g["away"], {}).get("user_id")
+            deadline = week_data.get("deadline")
+            deadline_line = f"\n**Due:** {deadline}" if deadline else ""
 
-        # Make sure the two owners (and @Admin) can post in this thread — one batched edit.
-        new_overwrites = dict(user_channel.overwrites)
-        changed = False
-        owner_overwrite = discord.PermissionOverwrite(send_messages_in_threads=True, use_application_commands=True)
-        for uid in filter(None, (home_owner_id, away_owner_id)):
-            member = guild.get_member(uid)
-            if member and new_overwrites.get(member) != owner_overwrite:
-                new_overwrites[member] = owner_overwrite
+            # Make sure the two owners (and @Admin) can post in this thread — one batched edit.
+            new_overwrites = dict(user_channel.overwrites)
+            changed = False
+            owner_overwrite = discord.PermissionOverwrite(send_messages_in_threads=True, use_application_commands=True)
+            for uid in filter(None, (home_owner_id, away_owner_id)):
+                member = guild.get_member(uid)
+                if member and new_overwrites.get(member) != owner_overwrite:
+                    new_overwrites[member] = owner_overwrite
+                    changed = True
+            admin_overwrite = discord.PermissionOverwrite(
+                send_messages_in_threads=True, use_application_commands=True, manage_threads=True,
+            )
+            if admin_role and new_overwrites.get(admin_role) != admin_overwrite:
+                new_overwrites[admin_role] = admin_overwrite
                 changed = True
-        admin_overwrite = discord.PermissionOverwrite(
-            send_messages_in_threads=True, use_application_commands=True, manage_threads=True,
-        )
-        if admin_role and new_overwrites.get(admin_role) != admin_overwrite:
-            new_overwrites[admin_role] = admin_overwrite
-            changed = True
-        if changed:
-            await user_channel.edit(overwrites=new_overwrites)
+            if changed:
+                await user_channel.edit(overwrites=new_overwrites)
 
-        # Find the existing thread, or create it if it's missing entirely.
-        thread = None
-        if g.get("thread_id"):
-            thread = guild.get_channel_or_thread(g["thread_id"])
+            # Find the existing thread, or create it if it's missing entirely.
+            thread = None
+            if g.get("thread_id"):
+                thread = guild.get_channel_or_thread(g["thread_id"])
+                if thread is None:
+                    try:
+                        thread = await self.bot.fetch_channel(g["thread_id"])
+                    except discord.NotFound:
+                        thread = None
+
+            created_new_thread = False
             if thread is None:
-                try:
-                    thread = await self.bot.fetch_channel(g["thread_id"])
-                except discord.NotFound:
-                    thread = None
+                thread = await user_channel.create_thread(
+                    name=f"{g['away']} vs {g['home']} — Week {week}",
+                    type=discord.ChannelType.public_thread,
+                )
+                g["thread_id"] = thread.id
+                season["weeks"][week_key] = week_data
+                save_season(season)
+                created_new_thread = True
 
-        created_new_thread = False
-        if thread is None:
-            thread = await user_channel.create_thread(
-                name=f"{g['away']} vs {g['home']} — Week {week}",
-                type=discord.ChannelType.public_thread,
+            # Repost a fresh buttons message (with the current card image).
+            game_view = CompleteGameView(cog=self, game_id=g["game_id"], show_schedule_button=True)
+            thread_embed, thread_file = await _build_thread_card(self, g)
+            await thread.send(
+                f"<@{away_owner_id}> <@{home_owner_id}> use this thread to schedule your game and report completion.{deadline_line}",
+                embed=thread_embed,
+                view=game_view,
+                allowed_mentions=discord.AllowedMentions(users=True),
+                **as_send_kwargs(thread_file),
             )
-            g["thread_id"] = thread.id
-            season["weeks"][week_key] = week_data
-            save_season(season)
-            created_new_thread = True
 
-        # Repost a fresh buttons message (with the current card image).
-        game_view = CompleteGameView(cog=self, game_id=g["game_id"], show_schedule_button=True)
-        thread_embed, thread_file = await _build_thread_card(self, g)
-        await thread.send(
-            f"<@{away_owner_id}> <@{home_owner_id}> use this thread to schedule your game and report completion.{deadline_line}",
-            embed=thread_embed,
-            view=game_view,
-            allowed_mentions=discord.AllowedMentions(users=True),
-            **as_send_kwargs(thread_file),
-        )
+            # Repost fresh scheme card embeds.
+            posted_cards = 0
+            scheme_cards_cog = self.bot.get_cog("SchemeCards")
+            if scheme_cards_cog is not None:
+                all_cards = load_scheme_cards()
+                for team_abbr in (g["home"], g["away"]):
+                    team_card = all_cards.get(team_abbr)
+                    if not team_card or (not team_card.get("offense") and not team_card.get("defense")):
+                        continue
+                    try:
+                        card_embed = build_compact_scheme_card_embed(scheme_cards_cog.teams[team_abbr], team_card)
+                        card_view = ExpandSchemeCardView(abbr=team_abbr)
+                        await thread.send(embed=card_embed, view=card_view, allowed_mentions=discord.AllowedMentions.none())
+                        posted_cards += 1
+                    except Exception as e:
+                        print(f"[refresh_game_thread] Failed to post scheme card for {team_abbr}: {e}")
 
-        # Repost fresh scheme card embeds.
-        posted_cards = 0
-        scheme_cards_cog = self.bot.get_cog("SchemeCards")
-        if scheme_cards_cog is not None:
-            all_cards = load_scheme_cards()
-            for team_abbr in (g["home"], g["away"]):
-                team_card = all_cards.get(team_abbr)
-                if not team_card or (not team_card.get("offense") and not team_card.get("defense")):
-                    continue
-                try:
-                    card_embed = build_compact_scheme_card_embed(scheme_cards_cog.teams[team_abbr], team_card)
-                    card_view = ExpandSchemeCardView(abbr=team_abbr)
-                    await thread.send(embed=card_embed, view=card_view, allowed_mentions=discord.AllowedMentions.none())
-                    posted_cards += 1
-                except Exception as e:
-                    print(f"[refresh_game_thread] Failed to post scheme card for {team_abbr}: {e}")
-
-        # Also resync the matchup card in the parent channel with the current
-        # scheduled/completed status — this is the manual fix for games whose card
-        # went stale before that sync was added to the button handlers themselves.
-        relevant_deadline = deadline
-        await _sync_channel_card(self.bot, self, g, week, week_data, roster, relevant_deadline)
+            # Also resync the matchup card in the parent channel with the current
+            # scheduled/completed status — this is the manual fix for games whose card
+            # went stale before that sync was added to the button handlers themselves.
+            relevant_deadline = deadline
+            await _sync_channel_card(self.bot, self, g, week, week_data, roster, relevant_deadline)
 
         away_name = self.teams[g["away"]]["name"]
         home_name = self.teams[g["home"]]["name"]
