@@ -89,6 +89,18 @@ def _trunc_field(value: str, limit: int = EMBED_FIELD_LIMIT) -> str:
     return value[: limit - 1].rstrip() + "\u2026"
 
 
+def _code(value: str, placeholder: str = "Not set") -> str:
+    """Wraps a value in inline code formatting so it renders as a distinct
+    monospace chip against its bold label -- Discord's real equivalent of
+    a contrast/shadow effect, since embeds don't support custom CSS.
+    Leaves placeholder text (e.g. 'Not set', 'Unknown') plain -- a code-chip
+    reading 'Not set' looks like a bug, not a missing value. Never use this
+    on URLs -- Discord suppresses link auto-parsing inside code spans."""
+    if not value or value == placeholder:
+        return value or placeholder
+    return f"`{value}`"
+
+
 def build_scheme_card_embed(team_info: dict, card: dict) -> discord.Embed:
     embed = discord.Embed(
         title=team_info["name"],
@@ -100,23 +112,25 @@ def build_scheme_card_embed(team_info: dict, card: dict) -> discord.Embed:
 
     offense = card.get("offense")
     if offense and offense.get("personnel"):
-        header_line = f"**Coach:** {offense.get('coach', 'Unknown')}"
+        header_line = f"**Coach:** {_code(offense.get('coach', 'Unknown'), 'Unknown')}"
         if offense.get("film"):
+            # Deliberately NOT run through _code() -- see that function's
+            # docstring, code spans would stop this from auto-linking.
             header_line += f"  \u2022  **Stream Link:** {offense['film']}"
         embed.description = header_line
 
-        lines = [f"**Scheme:** {offense.get('scheme', 'Not set')}  \u2022  **Coaching Tree:** {offense.get('coaching_tree', 'Not set')}"]
-        lines.append(f"**Playbook Type:** {offense.get('playbook_type', 'Not set')}  \u2022  **Base Playbook:** {offense.get('base_playbook', 'Not set')}")
-        lines.append(f"**Personnel:** {offense.get('personnel', 'Not set')}")
-        lines.append(f"**Tendency:** {offense.get('run_pass', 'Not set')}")
-        lines.append(f"**Tempo:** {offense.get('tempo', 'Not set')}")
+        lines = [f"**Scheme:** {_code(offense.get('scheme', 'Not set'))}  \u2022  **Coaching Tree:** {_code(offense.get('coaching_tree', 'Not set'))}"]
+        lines.append(f"**Playbook Type:** {_code(offense.get('playbook_type', 'Not set'))}  \u2022  **Base Playbook:** {_code(offense.get('base_playbook', 'Not set'))}")
+        lines.append(f"**Personnel:** {_code(offense.get('personnel', 'Not set'))}")
+        lines.append(f"**Tendency:** {_code(offense.get('run_pass', 'Not set'))}")
+        lines.append(f"**Tempo:** {_code(offense.get('tempo', 'Not set'))}")
         embed.add_field(name="OFFENSE", value=_trunc_field("\n".join(lines)), inline=False)
         embed.add_field(name="Offense Summary", value=_trunc_field(offense.get("summary")), inline=False)
 
     defense = card.get("defense")
     if defense:
-        lines = [f"**Scheme:** {defense.get('scheme', 'Not set')}  \u2022  **Identity:** {defense.get('coverage_type', 'Not set')}"]
-        lines.append(f"**Coaching Tree:** {defense.get('coaching_tree', 'Not set')}  \u2022  **Shell:** {defense.get('coverage_shell', 'Not set')}")
+        lines = [f"**Scheme:** {_code(defense.get('scheme', 'Not set'))}  \u2022  **Identity:** {_code(defense.get('coverage_type', 'Not set'))}"]
+        lines.append(f"**Coaching Tree:** {_code(defense.get('coaching_tree', 'Not set'))}  \u2022  **Shell:** {_code(defense.get('coverage_shell', 'Not set'))}")
         embed.add_field(name="DEFENSE", value=_trunc_field("\n".join(lines)), inline=False)
         embed.add_field(name="Defense Summary", value=_trunc_field(defense.get("summary")), inline=False)
 
@@ -821,11 +835,23 @@ class SchemeCards(commands.Cog):
 
             existing_id = message_ids.get(conf_name)
             message = None
+            skip_this_pass = False
             if existing_id:
                 try:
                     message = await channel.fetch_message(existing_id)
-                except (discord.NotFound, discord.HTTPException):
-                    message = None
+                except discord.NotFound:
+                    message = None  # genuinely deleted -- safe to post fresh below
+                except discord.HTTPException as e:
+                    # Anything else (rate limited, a permissions hiccup, a network
+                    # blip) is NOT proof the message is gone -- assuming so and
+                    # posting a new one would create a duplicate. Skip this
+                    # conference for this refresh pass instead; the next
+                    # successful refresh will retry the fetch.
+                    print(f"[refresh_scheme_cards_channel] Couldn't confirm {conf_name}'s message {existing_id} is gone (skipping this refresh): {e}")
+                    skip_this_pass = True
+
+            if skip_this_pass:
+                continue
 
             if message is not None:
                 edit_kwargs = {"embed": embed, "view": view}
