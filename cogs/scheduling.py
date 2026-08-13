@@ -146,11 +146,23 @@ async def refresh_dashboard(bot: commands.Bot):
 
     message_id = settings.get("dashboard_message_id")
     message = None
+    skip_this_pass = False
     if message_id:
         try:
             message = await channel.fetch_message(message_id)
-        except (discord.NotFound, discord.HTTPException):
-            message = None
+        except discord.NotFound:
+            message = None  # genuinely deleted -- safe to post fresh below
+        except discord.HTTPException as e:
+            # Anything else (rate limited, a permissions hiccup, a network blip)
+            # is NOT proof the message is gone -- assuming so and posting a new
+            # one would create a duplicate dashboard. Skip this pass instead;
+            # the next refresh_dashboard call (this runs after nearly every
+            # command) will retry.
+            print(f"[refresh_dashboard] Couldn't confirm dashboard message {message_id} is gone (skipping this refresh): {e}")
+            skip_this_pass = True
+
+    if skip_this_pass:
+        return
 
     if message is not None:
         await message.edit(embed=embed)
@@ -633,22 +645,28 @@ class AdvanceWeekWizard:
             return
 
         # Normal week advance: requires staged games and creates channels
-        week_data = season.get("weeks", {}).get(str(week))
+        async with _get_week_lock(week):
+            # Re-check fresh under the lock -- a second concurrent invocation
+            # of this same confirm button (double-click, or a Discord client
+            # retry on a slow response) must not both pass this check and
+            # both create a full duplicate set of channels/threads/messages.
+            fresh_season = load_season()
+            week_data = fresh_season.get("weeks", {}).get(str(week))
 
-        if not week_data or not week_data.get("games"):
-            await interaction.followup.send(
-                f"No staged games found for {week_label}. Use `/add_game` first.", ephemeral=True
+            if not week_data or not week_data.get("games"):
+                await interaction.followup.send(
+                    f"No staged games found for {week_label}. Use `/add_game` first.", ephemeral=True
+                )
+                return
+
+            if week_data.get("status") == "active":
+                await interaction.followup.send(f"{week_label} is already active.", ephemeral=True)
+                return
+
+            await _do_advance_week(
+                interaction, self.bot, week, week_label,
+                new_phase=None, deadline=deadline, cpu_deadline=cpu_deadline,
             )
-            return
-
-        if week_data.get("status") == "active":
-            await interaction.followup.send(f"{week_label} is already active.", ephemeral=True)
-            return
-
-        await _do_advance_week(
-            interaction, self.bot, week, week_label,
-            new_phase=None, deadline=deadline, cpu_deadline=cpu_deadline,
-        )
 
     async def _execute_stage_advance(
         self, interaction: discord.Interaction, season: dict,
@@ -685,19 +703,27 @@ class AdvanceWeekWizard:
 
         # Preseason → Regular Season with Week 0 games: create channels immediately
         if old_stage == "preseason" and self.week0_has_games:
-            week_data = season.get("weeks", {}).get("0")
-            if not week_data or not week_data.get("games"):
-                await interaction.followup.send(
-                    "No games staged for Week 0. Use `/add_game` first (while in Preseason, "
-                    "all games stage to Week 0), then try again.",
-                    ephemeral=True,
+            async with _get_week_lock(0):
+                # Re-check fresh under the lock -- same double-invocation
+                # protection as _execute_week_advance, and this path never had
+                # an active-week check at all before, unlike the normal one.
+                fresh_season = load_season()
+                week_data = fresh_season.get("weeks", {}).get("0")
+                if not week_data or not week_data.get("games"):
+                    await interaction.followup.send(
+                        "No games staged for Week 0. Use `/add_game` first (while in Preseason, "
+                        "all games stage to Week 0), then try again.",
+                        ephemeral=True,
+                    )
+                    return
+                if week_data.get("status") == "active":
+                    await interaction.followup.send("Week 0 is already active.", ephemeral=True)
+                    return
+                save_season(season)
+                await _do_advance_week(
+                    interaction, self.bot, 0, "Week 0",
+                    new_phase=None, deadline=deadline, cpu_deadline=cpu_deadline,
                 )
-                return
-            save_season(season)
-            await _do_advance_week(
-                interaction, self.bot, 0, "Week 0",
-                new_phase=None, deadline=deadline, cpu_deadline=cpu_deadline,
-            )
             return
 
         save_season(season)
@@ -1053,9 +1079,8 @@ async def _do_advance_week(
                 season["current_week"] = info["week_reset"]
                 break
 
-    async with _get_week_lock(week):
-        save_season(season)
-        await _refresh_week_tables_impl(bot, cog, week)
+    save_season(season)
+    await _refresh_week_tables_impl(bot, cog, week)
     await refresh_dashboard(bot)
 
     # Clean up the week we just advanced FROM — its channels (and everything posted
@@ -1453,24 +1478,36 @@ async def _refresh_week_tables_impl(bot: commands.Bot, cog: "Scheduling", week: 
 
             existing_id = week_data.get("cpu_channel_message_id")
             message = None
+            skip_this_pass = False
             if existing_id:
                 try:
                     message = await channel.fetch_message(existing_id)
-                except (discord.NotFound, discord.HTTPException):
-                    message = None
+                except discord.NotFound:
+                    message = None  # genuinely deleted -- safe to post fresh below
+                except discord.HTTPException as e:
+                    # Anything else (rate limited, a permissions hiccup, a network
+                    # blip) is NOT proof the message is gone. Assuming so and
+                    # posting a new one is exactly what caused duplicate table
+                    # messages in production -- skip this pass instead; the next
+                    # successful refresh call will retry the fetch.
+                    print(f"[refresh_week_tables] Couldn't confirm CPU table message {existing_id} for week {week} is gone (skipping this refresh): {e}")
+                    skip_this_pass = True
 
-            if message is not None:
-                edit_kwargs = {"embed": embed, "view": view}
-                if file is not None:
-                    edit_kwargs["attachments"] = [file]
-                await message.edit(**edit_kwargs)
-            else:
-                send_kwargs = {"embed": embed, "view": view, "allowed_mentions": discord.AllowedMentions.none()}
-                if file is not None:
-                    send_kwargs["file"] = file
-                new_message = await channel.send(**send_kwargs)
-                week_data["cpu_channel_message_id"] = new_message.id
-                changed = True
+            if not skip_this_pass:
+                if message is not None:
+                    edit_kwargs = {"embed": embed, "view": view}
+                    if file is not None:
+                        edit_kwargs["attachments"] = [file]
+                    await message.edit(**edit_kwargs)
+                else:
+                    send_kwargs = {"embed": embed, "view": view, "allowed_mentions": discord.AllowedMentions.none()}
+                    if file is not None:
+                        send_kwargs["file"] = file
+                    new_message = await channel.send(**send_kwargs)
+                    week_data["cpu_channel_message_id"] = new_message.id
+                    season["weeks"][week_key] = week_data
+                    save_season(season)
+                    changed = True
 
     # --- User games table (+ thread-mention chips for navigation) ---
     user_channel_id = week_data.get("user_channel_id")
@@ -1498,24 +1535,31 @@ async def _refresh_week_tables_impl(bot: commands.Bot, cog: "Scheduling", week: 
 
             existing_id = week_data.get("user_channel_message_id")
             message = None
+            skip_this_pass = False
             if existing_id:
                 try:
                     message = await channel.fetch_message(existing_id)
-                except (discord.NotFound, discord.HTTPException):
-                    message = None
+                except discord.NotFound:
+                    message = None  # genuinely deleted -- safe to post fresh below
+                except discord.HTTPException as e:
+                    print(f"[refresh_week_tables] Couldn't confirm user table message {existing_id} for week {week} is gone (skipping this refresh): {e}")
+                    skip_this_pass = True
 
-            if message is not None:
-                edit_kwargs = {"embed": embed}
-                if file is not None:
-                    edit_kwargs["attachments"] = [file]
-                await message.edit(**edit_kwargs)
-            else:
-                send_kwargs = {"embed": embed, "allowed_mentions": discord.AllowedMentions.none()}
-                if file is not None:
-                    send_kwargs["file"] = file
-                new_message = await channel.send(**send_kwargs)
-                week_data["user_channel_message_id"] = new_message.id
-                changed = True
+            if not skip_this_pass:
+                if message is not None:
+                    edit_kwargs = {"embed": embed}
+                    if file is not None:
+                        edit_kwargs["attachments"] = [file]
+                    await message.edit(**edit_kwargs)
+                else:
+                    send_kwargs = {"embed": embed, "allowed_mentions": discord.AllowedMentions.none()}
+                    if file is not None:
+                        send_kwargs["file"] = file
+                    new_message = await channel.send(**send_kwargs)
+                    week_data["user_channel_message_id"] = new_message.id
+                    season["weeks"][week_key] = week_data
+                    save_season(season)
+                    changed = True
 
     if changed:
         season["weeks"][week_key] = week_data
