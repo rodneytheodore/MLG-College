@@ -126,11 +126,7 @@ class PlayoffModal(discord.ui.Modal, title="Post Playoff Bracket"):
         self.bracket_input = discord.ui.TextInput(
             label="Paste bracket (tab-separated)",
             style=discord.TextStyle.paragraph,
-            placeholder=(
-                "Round\tSeed1\tTeam1\tRecord1\tSeed2\tTeam2\tRecord2\n"
-                "First Round\t12\tTexas State\t7-1\t5\tNotre Dame\t7-2\n"
-                "Quarterfinal\t4\tLSU\t7-1\tTBD\tTBD\tTBD\n..."
-            ),
+            placeholder="Round\tSeed1\tTeam1\tRecord1\tSeed2\tTeam2\tRecord2 (TBD if unknown)",
             max_length=4000,
             required=True,
         )
