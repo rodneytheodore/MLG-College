@@ -12,7 +12,9 @@ import io
 
 import aiohttp
 import discord
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
+
+from utils.render_common import load_font, fetch_logo, resize_to_square, FONT_BOLD_CANDIDATES, FONT_REGULAR_CANDIDATES
 
 CANVAS_BG_COLOR = (49, 51, 56, 255)  # matches Discord's dark embed background, same as matchup_image.py
 ROW_BG_ALT = (43, 45, 49, 255)
@@ -29,38 +31,6 @@ RANK_FONT_SIZE = 15
 TEAM_FONT_SIZE = 15
 RECORD_FONT_SIZE = 13
 MOVEMENT_FONT_SIZE = 13
-
-# Primary DejaVu paths (Debian/Ubuntu with fonts-dejavu-core installed), plus a
-# couple of common fallback locations. If none of these exist on the host —
-# e.g. a slim container image without system fonts — we fall back to PIL's
-# built-in bitmap font rather than crashing the whole render.
-FONT_BOLD_CANDIDATES = [
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-    "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-    "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
-]
-FONT_REGULAR_CANDIDATES = [
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-    "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
-]
-
-
-def _load_font(candidates: list, size: int):
-    """Tries each candidate TTF path in order; falls back to PIL's built-in
-    default font (fixed size, no anti-aliasing scaling) if none are available
-    on this host, so a missing font package degrades the image rather than
-    crashing the /post_top25 command."""
-    for path in candidates:
-        try:
-            return ImageFont.truetype(path, size)
-        except OSError:
-            continue
-    try:
-        return ImageFont.load_default(size=size)
-    except TypeError:
-        # Older Pillow versions' load_default() doesn't accept a size arg.
-        return ImageFont.load_default()
 
 UP_COLOR = (87, 242, 135, 255)
 DOWN_COLOR = (237, 66, 69, 255)
@@ -117,29 +87,6 @@ def _draw_movement(draw: ImageDraw.ImageDraw, x: int, y: int, row_height: int, m
         draw.text((x, text_y), movement, font=font, fill=color)
 
 
-async def _fetch_logo(session: aiohttp.ClientSession, url: str) -> Image.Image | None:
-    """Returns None on any failure so one bad/missing logo URL doesn't take
-    down the whole render — the caller falls back to a blank square for that row."""
-    try:
-        async with session.get(url) as resp:
-            resp.raise_for_status()
-            data = await resp.read()
-        return Image.open(io.BytesIO(data)).convert("RGBA")
-    except Exception:
-        return None
-
-
-def _resize_to_square(img: Image.Image, size: int) -> Image.Image:
-    ratio = size / max(img.width, img.height)
-    new_w, new_h = max(1, int(img.width * ratio)), max(1, int(img.height * ratio))
-    resized = img.resize((new_w, new_h))
-    # Center the (possibly non-square) resized logo on a transparent square canvas
-    # so every row's logo occupies the same footprint regardless of source aspect ratio.
-    square = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    square.paste(resized, ((size - new_w) // 2, (size - new_h) // 2), resized)
-    return square
-
-
 async def build_top25_file(rows: list[dict]) -> discord.File | None:
     """rows: list of dicts with keys rank (int), movement (str, e.g. '▲4' / '▼2' /
     'NEW' / '—'), team_name (str, display name to print), record (str),
@@ -152,7 +99,7 @@ async def build_top25_file(rows: list[dict]) -> discord.File | None:
     logo_urls = [r.get("logo_url") for r in rows]
     async with aiohttp.ClientSession() as session:
         logo_imgs = await asyncio.gather(*[
-            _fetch_logo(session, url) if url else asyncio.sleep(0, result=None)
+            fetch_logo(session, url) if url else asyncio.sleep(0, result=None)
             for url in logo_urls
         ])
 
@@ -160,10 +107,10 @@ async def build_top25_file(rows: list[dict]) -> discord.File | None:
     canvas = Image.new("RGB", (CARD_WIDTH, canvas_height), CANVAS_BG_COLOR[:3])
     draw = ImageDraw.Draw(canvas)
 
-    rank_font = _load_font(FONT_BOLD_CANDIDATES, RANK_FONT_SIZE)
-    team_font = _load_font(FONT_REGULAR_CANDIDATES, TEAM_FONT_SIZE)
-    record_font = _load_font(FONT_REGULAR_CANDIDATES, RECORD_FONT_SIZE)
-    movement_font = _load_font(FONT_BOLD_CANDIDATES, MOVEMENT_FONT_SIZE)
+    rank_font = load_font(FONT_BOLD_CANDIDATES, RANK_FONT_SIZE)
+    team_font = load_font(FONT_REGULAR_CANDIDATES, TEAM_FONT_SIZE)
+    record_font = load_font(FONT_REGULAR_CANDIDATES, RECORD_FONT_SIZE)
+    movement_font = load_font(FONT_BOLD_CANDIDATES, MOVEMENT_FONT_SIZE)
 
     y = TOP_PADDING
     for i, row in enumerate(rows):
@@ -173,7 +120,7 @@ async def build_top25_file(rows: list[dict]) -> discord.File | None:
 
         logo = logo_imgs[i]
         if logo is not None:
-            square_logo = _resize_to_square(logo, LOGO_SIZE)
+            square_logo = resize_to_square(logo, LOGO_SIZE)
             canvas.paste(square_logo, (x, y + (ROW_HEIGHT - LOGO_SIZE) // 2), square_logo)
         x += LOGO_SIZE + 10
 
