@@ -1717,22 +1717,49 @@ class Scheduling(commands.Cog):
         thread-deletion timer has passed, and deletes that thread. Reading the
         timestamp from disk (rather than an in-memory timer) means a deletion
         that was due during a restart still gets picked up once the bot is
-        back online."""
+        back online.
+
+        This runs unlocked and on its own schedule, independent of any command
+        or button click -- so unlike those, it can land at literally any
+        moment. The scan below is read-only (safe to run against a snapshot);
+        the actual mutation + save for each due game happens separately, under
+        that game's week lock, re-reading fresh state right before saving.
+        Earlier this looped over one `season` object loaded at the very start
+        and saved it once at the very end -- if anything else (a button click,
+        a refresh) saved in between, this loop's later save would silently
+        overwrite it with the stale copy, which is exactly the kind of lost
+        update that was causing duplicate table posts."""
         season = load_season()
         now = datetime.now(timezone.utc)
-        changed = False
 
-        for week_data in season.get("weeks", {}).values():
+        due = []  # (week_key, game_id) pairs whose timer has passed
+        for week_key, week_data in season.get("weeks", {}).items():
             for g in week_data.get("games", []):
                 delete_at_str = g.get("thread_delete_at")
                 if not delete_at_str:
                     continue
+                if now >= datetime.fromisoformat(delete_at_str):
+                    due.append((week_key, g["game_id"]))
 
-                delete_at = datetime.fromisoformat(delete_at_str)
-                if now < delete_at:
-                    continue
+        for week_key, game_id in due:
+            try:
+                week_num = int(week_key)
+            except ValueError:
+                continue
 
-                thread_id = g.get("thread_id")
+            async with _get_week_lock(week_num):
+                fresh_season = load_season()
+                week, game = find_game_by_id(fresh_season, game_id)
+                if game is None:
+                    continue  # deleted/no longer exists
+
+                delete_at_str = game.get("thread_delete_at")
+                if not delete_at_str:
+                    continue  # already cleared by something else in the meantime
+                if now < datetime.fromisoformat(delete_at_str):
+                    continue  # extended/changed since we queued it above
+
+                thread_id = game.get("thread_id")
                 if thread_id:
                     try:
                         thread = self.bot.get_channel(thread_id) or await self.bot.fetch_channel(thread_id)
@@ -1740,12 +1767,9 @@ class Scheduling(commands.Cog):
                     except (discord.NotFound, discord.HTTPException):
                         pass
 
-                g["thread_id"] = None
-                g["thread_delete_at"] = None
-                changed = True
-
-        if changed:
-            save_season(season)
+                game["thread_id"] = None
+                game["thread_delete_at"] = None
+                save_season(fresh_season)
 
     @cleanup_threads.before_loop
     async def before_cleanup_threads(self):
