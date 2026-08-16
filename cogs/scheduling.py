@@ -966,6 +966,14 @@ async def _do_advance_week(
         )
         return
 
+    # Re-classify each game's type from the roster we just loaded, rather than
+    # trusting whatever it was set to at /add_game staging time -- a team can
+    # be vacated between staging and this week actually going active, and a
+    # stale "user" type here would create a thread for a game that should now
+    # be CPU (the exact bug this fixes).
+    for g in week_data["games"]:
+        g["type"] = classify_game(g["home"], g["away"], roster)
+
     user_games = [g for g in week_data["games"] if g["type"] == "user"]
     cpu_games = [g for g in week_data["games"] if g["type"] == "cpu"]
 
@@ -2235,6 +2243,24 @@ class Scheduling(commands.Cog):
                     "❌ No **Scheduling** category found in this server.", ephemeral=True,
                 )
                 return
+
+            # Re-classify from the roster we just loaded, not whatever was
+            # saved when this game was staged or last posted -- a team can be
+            # vacated in between, and repost_week is explicitly a "recover /
+            # bring this week's channels up to date" command, so this is
+            # exactly where stale types need to be caught and corrected.
+            for g in week_data["games"]:
+                new_type = classify_game(g["home"], g["away"], roster)
+                if g["type"] == "user" and new_type == "cpu" and g.get("thread_id"):
+                    # This game already had a thread from before the vacate --
+                    # it's moving to the CPU table now, so that thread is stale.
+                    try:
+                        stale_thread = self.bot.get_channel(g["thread_id"]) or await self.bot.fetch_channel(g["thread_id"])
+                        await stale_thread.delete()
+                    except (discord.NotFound, discord.HTTPException):
+                        pass
+                    g["thread_id"] = None
+                g["type"] = new_type
 
             user_games = [g for g in week_data["games"] if g["type"] == "user"]
             cpu_games = [g for g in week_data["games"] if g["type"] == "cpu"]
