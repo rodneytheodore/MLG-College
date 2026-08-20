@@ -1690,11 +1690,20 @@ class CompleteGameView(discord.ui.View):
                 except (discord.NotFound, discord.HTTPException):
                     pass
 
-                # Persist the deletion time so it survives a bot restart — the
-                # background cleanup_threads loop picks this up, not an in-memory timer.
+                # Reload fresh here rather than reusing the `season` object from
+                # the top of this function -- _sync_channel_card (via
+                # refresh_week_tables) may have independently saved its own
+                # freshly-loaded copy in between (e.g. a newly created table
+                # message's ID). Saving our older `season` object at this point
+                # would silently overwrite that change, which is exactly what
+                # was causing a duplicate table message after completions that
+                # needed a fresh post.
                 delete_at = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()
-                game["thread_delete_at"] = delete_at
-                save_season(season)
+                fresh_season = load_season()
+                _, fresh_game = find_game_by_id(fresh_season, self.game_id)
+                if fresh_game is not None:
+                    fresh_game["thread_delete_at"] = delete_at
+                    save_season(fresh_season)
 
         await refresh_dashboard(self.cog.bot)
 
