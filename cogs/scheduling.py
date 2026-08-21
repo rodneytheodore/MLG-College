@@ -2456,9 +2456,18 @@ class Scheduling(commands.Cog):
                         f"{find_mlg_mention(guild)} {message_text}".strip(),
                         allowed_mentions=discord.AllowedMentions(roles=True),
                     )
-                    week_data["announcement_posted"] = True
-                    season["weeks"][week_key] = week_data
-                    save_season(season)
+                    # Reload fresh here rather than reusing the `season` object
+                    # from earlier in this function -- _refresh_week_tables_impl
+                    # (called just above) may have independently saved its own
+                    # freshly-loaded copy (e.g. a newly created table message's
+                    # ID). Saving our older `season` object at this point would
+                    # silently overwrite that change -- the exact same bug
+                    # already fixed in _on_complete_click, just relocated here.
+                    fresh_season = load_season()
+                    fresh_week_data = fresh_season.get("weeks", {}).get(week_key, week_data)
+                    fresh_week_data["announcement_posted"] = True
+                    fresh_season["weeks"][week_key] = fresh_week_data
+                    save_season(fresh_season)
                     reposted_announcement = True
 
         summary = [
