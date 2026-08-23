@@ -644,20 +644,23 @@ class AdvanceWeekWizard:
             )
             return
 
-        # Normal week advance: requires staged games and creates channels
+        # Normal week advance: creates channels even if nothing's staged --
+        # the channel-creation logic already handles an empty week gracefully
+        # (posts "No CPU/user games this week." instead of game rows), so
+        # there's no reason to block it here.
         async with _get_week_lock(week):
             # Re-check fresh under the lock -- a second concurrent invocation
             # of this same confirm button (double-click, or a Discord client
             # retry on a slow response) must not both pass this check and
             # both create a full duplicate set of channels/threads/messages.
             fresh_season = load_season()
-            week_data = fresh_season.get("weeks", {}).get(str(week))
-
-            if not week_data or not week_data.get("games"):
-                await interaction.followup.send(
-                    f"No staged games found for {week_label}. Use `/add_game` first.", ephemeral=True
-                )
-                return
+            week_key = str(week)
+            week_data = fresh_season.setdefault("weeks", {}).setdefault(week_key, {
+                "status": "upcoming",
+                "user_channel_id": None,
+                "cpu_channel_id": None,
+                "games": [],
+            })
 
             if week_data.get("status") == "active":
                 await interaction.followup.send(f"{week_label} is already active.", ephemeral=True)
@@ -931,17 +934,13 @@ async def _do_advance_week(
     """Shared logic for actually building the week's channels and threads."""
     season = load_season()
     week_key = str(week)
-    week_data = season.get("weeks", {}).get(week_key)
+    week_data = season.get("weeks", {}).get(week_key) or {
+        "status": "upcoming", "user_channel_id": None, "cpu_channel_id": None, "games": [],
+    }
 
     # Remember which week we're advancing FROM, before anything below overwrites
     # season["current_week"] — its channels get deleted once the new week is live.
     previous_week_num = season.get("current_week")
-
-    if not week_data or not week_data.get("games"):
-        await interaction.followup.send(
-            f"No staged games found for {week_label}. Use `/add_game` first.", ephemeral=True
-        )
-        return
 
     # Save the deadlines right away, before any channel/thread creation. If something
     # crashes partway through the loop below, the due date is still recoverable via
