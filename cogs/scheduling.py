@@ -82,7 +82,7 @@ def build_dashboard_embed(season: dict, roster: dict, scheme_cards: dict,
     current_stage = season.get("current_stage", "preseason")
     stage = PHASE_DISPLAY.get(current_stage, current_stage)
     current_week = season.get("current_week")
-    week_text = f"Week {current_week}" if current_week is not None else "No active week"
+    week_text = week_display_name(current_week) if current_week is not None else "No active week"
     claimed_count = len(roster)
 
     # "Submitted" = both offense and defense halves are filled in for that team
@@ -201,8 +201,8 @@ PHASE_TRANSITIONS = {
         "display": "Conference Championships",
         "next": "postseason",
         "week_reset": 1,
-        "has_weeks": False,
-        "week_cap": None,
+        "has_weeks": True,
+        "week_cap": 1,
         "early_switch_allowed": False,
     },
     "postseason": {
@@ -258,10 +258,37 @@ PHASE_TRANSITIONS = {
 
 PHASE_DISPLAY = {k: v["display"] for k, v in PHASE_TRANSITIONS.items()}
 
+# Conference Championships gets exactly one game-week, created/staged the same
+# way any regular week is (channels + threads), but it isn't part of the
+# normal 1..16 regular-season numbering -- reusing a real week number like 1
+# would collide with (and overwrite) that week's already-archived data from
+# earlier in the same dynasty. This sentinel keeps it in its own namespace.
+CONFERENCE_CHAMPIONSHIP_WEEK = -1
 
-def get_announcement_message(current_phase: str, new_phase: str | None, week: int | None, deadline: str | None, cpu_deadline: str | None, general_deadline: str | None = None) -> str:
+
+def week_display_name(week: int | None) -> str:
+    """User-facing label for a week number -- handles the Conference
+    Championship sentinel specially, since "Week -1" would be meaningless
+    to anyone reading it."""
+    if week == CONFERENCE_CHAMPIONSHIP_WEEK:
+        return "Conference Championship"
+    return f"Week {week}"
+
+
+def week_channel_slug(week: int | None) -> str:
+    """Channel-name-safe slug for a week number, e.g. for
+    'week-3-user-games'. Same Conference Championship special-case as
+    week_display_name()."""
+    if week == CONFERENCE_CHAMPIONSHIP_WEEK:
+        return "conf-champs"
+    return f"week-{week}"
+
+
+def get_announcement_message(current_phase: str, new_phase: str | None, week: int | None, deadline: str | None, cpu_deadline: str | None, general_deadline: str | None = None, has_games: bool = True) -> str:
     """Returns the formatted announcement text for a given phase transition or week advance.
-    Pass general_deadline instead of deadline/cpu_deadline for a single non-game-split due date."""
+    Pass general_deadline instead of deadline/cpu_deadline for a single non-game-split due date.
+    Pass has_games=False for a week with nothing staged -- swaps in bye-week wording
+    and drops the deadline lines, since a deadline doesn't make sense with no games to play."""
     if general_deadline:
         both_dl = f"\n📅 **Due:** {general_deadline}"
     else:
@@ -269,15 +296,30 @@ def get_announcement_message(current_phase: str, new_phase: str | None, week: in
         cpu_dl = f"\n📅 **CPU Games Due:** {cpu_deadline}" if cpu_deadline else ""
         both_dl = f"{cpu_dl}{dl}"
 
+    if not has_games:
+        both_dl = ""
+
+    week_label = week_display_name(week) if week is not None else None
+
     messages = {
         # Same-phase week advances
-        ("regular_season", None): f"🏈 **Week {week} is now live!** Check the game channels to find your game thread and get scheduled.{both_dl}",
-        ("postseason", None): f"🏈 **Postseason Week {week} is live!** Next round matchups are set. Find your thread and get scheduled.{both_dl}",
+        ("regular_season", None): (
+            f"😴 **{week_label} is a bye week — no games scheduled.**" if not has_games else
+            f"🏈 **{week_label} is now live!** Check the game channels to find your game thread and get scheduled.{both_dl}"
+        ),
+        ("postseason", None): (
+            f"😴 **Postseason {week_label} has no games scheduled this round.**" if not has_games else
+            f"🏈 **Postseason {week_label} is live!** Next round matchups are set. Find your thread and get scheduled.{both_dl}"
+        ),
+        ("conference_championships", None): (
+            "😴 **No Conference Championship games this cycle.**" if not has_games else
+            f"🏆 **Conference Championship games are live!** Check the game channels to find your game thread and get scheduled.{both_dl}"
+        ),
 
         ("offseason_transfer_portal", None): f"🔄 **Transfer Portal Week {week} is now live!**{both_dl}",
         ("team_draft", "preseason"): f"🏈 **The draft is complete and Preseason has begun!** Rosters are locked in — time to scout players and get your program ready.{both_dl}",
         ("preseason", "regular_season"): f"🚨 **The Regular Season has begun!** Week 0 kicks things off. Time to offer scholarships!{both_dl}",
-        ("regular_season", "conference_championships"): f"🏆 **Conference Championship Week!** The regular season is over. Conference Championship matchups have been set — this is what you played for. Don't let up now.{both_dl}",
+        ("regular_season", "conference_championships"): "🏆 **Conference Championships!** The regular season is over. Stage this round's matchups with `/add_game` or `/add_games_bulk`, then run `/advance_week` again to open the game channels.",
         ("conference_championships", "postseason"): f"🎉 **Postseason is here!** Bowl season and Playoff matchups are live. Check your game thread and get scheduled.{both_dl}",
         ("postseason", "offseason_players_leaving"): f"📤 **The season has concluded and the offseason is now underway.** Players Leaving is now live — review your roster for early departures and transfers out of the program.{both_dl}",
         ("offseason_players_leaving", "offseason_transfer_portal"): f"🔄 **Transfer Portal is now open!** Players are on the move. Check which players have entered the portal and make your decisions accordingly.{both_dl}",
@@ -288,7 +330,11 @@ def get_announcement_message(current_phase: str, new_phase: str | None, week: in
     }
 
     key = (current_phase, new_phase)
-    return messages.get(key, f"🏈 **Week {week} is now live!**{both_dl}")
+    default_msg = (
+        f"😴 **{week_label} has no games scheduled.**" if not has_games else
+        f"🏈 **{week_label} is now live!**{both_dl}"
+    )
+    return messages.get(key, default_msg)
 
 
 def get_phase(key: str) -> dict:
@@ -301,6 +347,11 @@ def next_phase(current: str) -> str | None:
 
 def week_cap_reached(phase_key: str, current_week: int | None) -> bool:
     """True if this phase has a week cap and the current week has hit it."""
+    if phase_key == "conference_championships":
+        # Exactly one game-week, ever -- "at cap" means that week has
+        # already been created (current_week holds the sentinel once it has),
+        # not a numeric >= comparison against a real week count.
+        return current_week == CONFERENCE_CHAMPIONSHIP_WEEK
     info = get_phase(phase_key)
     week_cap = info.get("week_cap")
     if not info.get("has_weeks") or week_cap is None:
@@ -427,6 +478,8 @@ class AdvanceWeekWizard:
 
     @property
     def next_week_num(self) -> int:
+        if self.current_stage == "conference_championships":
+            return CONFERENCE_CHAMPIONSHIP_WEEK
         return self.current_week + 1
 
     @property
@@ -447,7 +500,7 @@ class AdvanceWeekWizard:
     def _action_label(self) -> str:
         if self.action == "next_week":
             stage_label = PHASE_DISPLAY.get(self.current_stage, self.current_stage)
-            return f"Week {self.next_week_num} ({stage_label})"
+            return f"{week_display_name(self.next_week_num)} ({stage_label})"
         elif self.action == "next_phase":
             return self.next_phase_label
         return "..."
@@ -459,12 +512,12 @@ class AdvanceWeekWizard:
         has_weeks = info.get("has_weeks", False)
         at_cap = week_cap_reached(self.current_stage, self.current_week)
 
-        # Offer stage switch only for regular_season at week 15+
+        # Offer stage switch only for regular_season at week 14+
         needs_choice = (
             has_weeks
             and not at_cap
             and info.get("early_switch_allowed", False)
-            and self.current_week >= 15
+            and self.current_week >= 14
         )
 
         if not has_weeks or at_cap:
@@ -476,7 +529,7 @@ class AdvanceWeekWizard:
             self.action = "next_week"
             await self._send_day_select(interaction)
 
-    # ---- Step: action choice (regular_season week 15+) ----
+    # ---- Step: action choice (regular_season week 14+) ----
 
     async def _send_action_choice(self, interaction: discord.Interaction):
         options = [
@@ -575,7 +628,7 @@ class AdvanceWeekWizard:
 
         if self.action == "next_week":
             action_line = (
-                f"📅 Advance to **Week {self.next_week_num}** "
+                f"📅 Advance to **{week_display_name(self.next_week_num)}** "
                 f"({PHASE_DISPLAY.get(self.current_stage, self.current_stage)})"
             )
         elif self.week0_has_games is True:
@@ -613,7 +666,7 @@ class AdvanceWeekWizard:
         deadline: str | None, cpu_deadline: str | None,
     ):
         week = self.next_week_num
-        week_label = f"Week {week}"
+        week_label = week_display_name(week)
         info = get_phase(self.current_stage)
 
         # Stages that track weeks but don't create Discord channels (e.g. Transfer Portal)
@@ -844,7 +897,7 @@ class ExtendDeadlineWizard:
         return build_deadline_strings(self.day_offset, self.hour_str, self.minute_str)
 
     def _label(self) -> str:
-        return f"Extend Deadline — Week {self.week}"
+        return f"Extend Deadline — {week_display_name(self.week)}"
 
     async def start(self, interaction: discord.Interaction):
         view = AdvanceSelectView(DAY_OPTIONS, "New deadline — how many days out?", self._on_day_pick)
@@ -919,7 +972,7 @@ class ExtendDeadlineWizard:
                         await thread.send(f"⏰ **Deadline extended.**{dl_text}")
 
         await interaction.followup.send(
-            f"✅ **Week {self.week} deadline updated.**\n"
+            f"✅ **{week_display_name(self.week)} deadline updated.**\n"
             f"User games: {deadline or 'No deadline'}\n"
             f"CPU games: {cpu_deadline or 'No deadline'}",
             ephemeral=True,
@@ -1010,11 +1063,11 @@ async def _do_advance_week(
             if member:
                 user_overwrites[member] = owner_overwrite
     user_channel = await guild.create_text_channel(
-        f"week-{week}-user-games",
+        f"{week_channel_slug(week)}-user-games",
         category=scheduling_category,
         overwrites=user_overwrites,
     )
-    cpu_channel = await guild.create_text_channel(f"week-{week}-cpu-games", category=scheduling_category)
+    cpu_channel = await guild.create_text_channel(f"{week_channel_slug(week)}-cpu-games", category=scheduling_category)
 
     deadline_line = f"\n**Due:** {deadline}" if deadline else ""
 
@@ -1029,7 +1082,7 @@ async def _do_advance_week(
             # (posted below via refresh_week_tables) lists each thread as a
             # clickable mention chip for navigation.
             thread = await user_channel.create_thread(
-                name=f"{g['away']} vs {g['home']} — Week {week}",
+                name=f"{g['away']} vs {g['home']} — {week_display_name(week)}",
                 type=discord.ChannelType.public_thread,
             )
             home_owner_id = roster.get(g["home"], {}).get("user_id")
@@ -1114,6 +1167,7 @@ async def _do_advance_week(
             week=week,
             deadline=deadline,
             cpu_deadline=cpu_deadline,
+            has_games=bool(week_data.get("games")),
         )
         await ann_channel.send(
             f"{find_mlg_mention(guild)} {message_text}".strip(),
@@ -1126,7 +1180,7 @@ async def _do_advance_week(
 
     phase_msg = f" — now in **{PHASE_DISPLAY[new_phase]}**" if new_phase else ""
     await interaction.followup.send(
-        f"Advanced to Week {week}{phase_msg}. Channels and threads are live.{deleted_channels_note}", ephemeral=True
+        f"Advanced to {week_display_name(week)}{phase_msg}. Channels and threads are live.{deleted_channels_note}", ephemeral=True
     )
 
 
@@ -1224,9 +1278,12 @@ def _split_matchup_line(line: str) -> tuple[str, str]:
 def resolve_target_week(season: dict, target: str) -> tuple[int, str]:
     """Resolve 'current' or 'next' to an actual week number.
     Returns (week_number, description_for_confirmation).
-    In Preseason, all staging targets Week 0."""
+    In Preseason, all staging targets Week 0. In Conference Championships,
+    all staging targets the dedicated sentinel week (there's only ever one)."""
     if season.get("current_stage") == "preseason":
         return 0, "Week 0 (Preseason)"
+    if season.get("current_stage") == "conference_championships":
+        return CONFERENCE_CHAMPIONSHIP_WEEK, "Conference Championship"
     current_week = season.get("current_week") or 0
     if target == "current":
         week = max(current_week, 1)
@@ -1475,7 +1532,7 @@ async def _refresh_week_tables_impl(bot: commands.Bot, cog: "Scheduling", week: 
         if channel is not None:
             rows = [_build_game_row(cog, g) for g in cpu_games]
             file = await build_game_table_file(rows)
-            embed = discord.Embed(title=f"Week {week} — CPU Games", color=discord.Color.dark_grey())
+            embed = discord.Embed(title=f"{week_display_name(week)} — CPU Games", color=discord.Color.dark_grey())
             cpu_deadline = week_data.get("cpu_deadline")
             if cpu_deadline:
                 embed.description = f"📅 **All CPU games due:** {cpu_deadline}"
@@ -1529,7 +1586,7 @@ async def _refresh_week_tables_impl(bot: commands.Bot, cog: "Scheduling", week: 
         if channel is not None:
             rows = [_build_game_row(cog, g) for g in user_games]
             file = await build_game_table_file(rows)
-            embed = discord.Embed(title=f"Week {week} — User Games", color=0xFFD700)
+            embed = discord.Embed(title=f"{week_display_name(week)} — User Games", color=0xFFD700)
             deadline = week_data.get("deadline")
             if deadline:
                 embed.description = f"📅 **Due:** {deadline}"
@@ -1912,7 +1969,7 @@ class Scheduling(commands.Cog):
         })
 
         if week_data.get("status") == "active":
-            await send_ephemeral(interaction, f"Week {week} is already active. Games can't be added to a live week.")
+            await send_ephemeral(interaction, f"{week_display_name(week)} is already active. Games can't be added to a live week.")
             return
 
         # Prevent double-booking a team in the same week
@@ -2155,7 +2212,7 @@ class Scheduling(commands.Cog):
             await send_ephemeral(interaction, f"No staged games found for {week_label}.")
             return
         if week_data.get("status") == "active":
-            await send_ephemeral(interaction, f"Week {week} is already active. Games can't be removed from a live week.")
+            await send_ephemeral(interaction, f"{week_display_name(week)} is already active. Games can't be removed from a live week.")
             return
 
         before_count = len(week_data["games"])
@@ -2259,7 +2316,7 @@ class Scheduling(commands.Cog):
         week_key = str(week)
         week_data = season.get("weeks", {}).get(week_key)
         if not week_data or not week_data.get("games"):
-            await interaction.followup.send(f"No staged games found for Week {week}.", ephemeral=True)
+            await interaction.followup.send(f"No staged games found for {week_display_name(week)}.", ephemeral=True)
             return
 
         async with _get_week_lock(week):
@@ -2313,7 +2370,7 @@ class Scheduling(commands.Cog):
             if week_data.get("user_channel_id"):
                 user_channel = guild.get_channel(week_data["user_channel_id"])
             if user_channel is None:
-                user_channel = discord.utils.get(scheduling_category.text_channels, name=f"week-{week}-user-games")
+                user_channel = discord.utils.get(scheduling_category.text_channels, name=f"{week_channel_slug(week)}-user-games")
             if user_channel is None and user_games:
                 user_overwrites = {
                     guild.default_role: discord.PermissionOverwrite(
@@ -2330,7 +2387,7 @@ class Scheduling(commands.Cog):
                         send_messages_in_threads=True, use_application_commands=True, manage_threads=True,
                     )
                 user_channel = await guild.create_text_channel(
-                    f"week-{week}-user-games", category=scheduling_category, overwrites=user_overwrites,
+                    f"{week_channel_slug(week)}-user-games", category=scheduling_category, overwrites=user_overwrites,
                 )
 
             if user_channel is not None:
@@ -2363,9 +2420,9 @@ class Scheduling(commands.Cog):
             if week_data.get("cpu_channel_id"):
                 cpu_channel = guild.get_channel(week_data["cpu_channel_id"])
             if cpu_channel is None:
-                cpu_channel = discord.utils.get(scheduling_category.text_channels, name=f"week-{week}-cpu-games")
+                cpu_channel = discord.utils.get(scheduling_category.text_channels, name=f"{week_channel_slug(week)}-cpu-games")
             if cpu_channel is None and cpu_games:
-                cpu_channel = await guild.create_text_channel(f"week-{week}-cpu-games", category=scheduling_category)
+                cpu_channel = await guild.create_text_channel(f"{week_channel_slug(week)}-cpu-games", category=scheduling_category)
 
             created_threads = 0
 
@@ -2382,7 +2439,7 @@ class Scheduling(commands.Cog):
                     continue
 
                 thread = await user_channel.create_thread(
-                    name=f"{g['away']} vs {g['home']} — Week {week}",
+                    name=f"{g['away']} vs {g['home']} — {week_display_name(week)}",
                     type=discord.ChannelType.public_thread,
                 )
                 home_owner_id = roster.get(g["home"], {}).get("user_id")
@@ -2450,6 +2507,7 @@ class Scheduling(commands.Cog):
                         week=week,
                         deadline=deadline,
                         cpu_deadline=cpu_deadline,
+                        has_games=bool(week_data.get("games")),
                     )
                     await ann_channel.send(
                         f"{find_mlg_mention(guild)} {message_text}".strip(),
@@ -2470,7 +2528,7 @@ class Scheduling(commands.Cog):
                     reposted_announcement = True
 
         summary = [
-            f"✅ Repost complete for **Week {week}**.",
+            f"✅ Repost complete for **{week_display_name(week)}**.",
             f"- Announcement: {'posted' if reposted_announcement else 'already posted — skipped'}",
             f"- User games due: {deadline or '*(none set)*'}",
             f"- CPU games due: {cpu_deadline or '*(none set)*'}",
@@ -2510,7 +2568,7 @@ class Scheduling(commands.Cog):
             if week_data.get("user_channel_id"):
                 user_channel = guild.get_channel(week_data["user_channel_id"])
             if user_channel is None and scheduling_category is not None:
-                user_channel = discord.utils.get(scheduling_category.text_channels, name=f"week-{week}-user-games")
+                user_channel = discord.utils.get(scheduling_category.text_channels, name=f"{week_channel_slug(week)}-user-games")
             if user_channel is None:
                 await interaction.followup.send(
                     "Couldn't find this week's user-games channel. Try `/repost_week` first to recreate it.",
@@ -2560,7 +2618,7 @@ class Scheduling(commands.Cog):
             created_new_thread = False
             if thread is None:
                 thread = await user_channel.create_thread(
-                    name=f"{g['away']} vs {g['home']} — Week {week}",
+                    name=f"{g['away']} vs {g['home']} — {week_display_name(week)}",
                     type=discord.ChannelType.public_thread,
                 )
                 g["thread_id"] = thread.id
@@ -2646,7 +2704,7 @@ class Scheduling(commands.Cog):
 
         week_data = season.get("weeks", {}).get(str(current_week))
         if not week_data or week_data.get("status") != "active":
-            await send_ephemeral(interaction, f"Week {current_week} is not currently active.")
+            await send_ephemeral(interaction, f"{week_display_name(current_week)} is not currently active.")
             return
 
         wizard = ExtendDeadlineWizard(bot=self.bot, week=current_week)
@@ -2677,7 +2735,7 @@ class Scheduling(commands.Cog):
         current_stage = season.get("current_stage", "preseason")
         stage = PHASE_DISPLAY.get(current_stage, current_stage)
         current_week = season.get("current_week")
-        week_text = f"Week {current_week}" if current_week is not None else "No active week"
+        week_text = week_display_name(current_week) if current_week is not None else "No active week"
 
         await send_ephemeral(interaction, f"**Dynasty Year:** {year}\n**Stage:** {stage}\n**{week_text}**")
 
