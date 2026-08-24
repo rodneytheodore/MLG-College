@@ -100,7 +100,7 @@ def build_dashboard_embed(season: dict, roster: dict, scheme_cards: dict,
     week_data = season.get("weeks", {}).get(str(current_week)) if current_week is not None else None
     games = week_data.get("games", []) if week_data else []
 
-    cpu_games = [g for g in games if g["type"] == "cpu"]
+    cpu_games = [g for g in games if g["type"] == "cpu" and game_has_league_user(g, roster)]
     cpu_completed = sum(1 for g in cpu_games if g.get("status") == "completed")
 
     user_games = [g for g in games if g["type"] == "user"]
@@ -1027,7 +1027,7 @@ async def _do_advance_week(
         g["type"] = classify_game(g["home"], g["away"], roster)
 
     user_games = [g for g in week_data["games"] if g["type"] == "user"]
-    cpu_games = [g for g in week_data["games"] if g["type"] == "cpu"]
+    cpu_games = [g for g in week_data["games"] if g["type"] == "cpu" and game_has_league_user(g, roster)]
 
     # User channel: everyone can view, only bot/admins can post; thread access granted per-game.
     # All owner overwrites are included in the initial create_text_channel() call (a single
@@ -1261,6 +1261,14 @@ def classify_game(home_abbr: str, away_abbr: str, roster: dict) -> str:
     if home_abbr in roster and away_abbr in roster:
         return "user"
     return "cpu"
+
+
+def game_has_league_user(game: dict, roster: dict) -> bool:
+    """True if at least one side of this game has a league owner. A game
+    where neither side is owned (full CPU vs CPU) has no one to post it
+    for, so it's filtered out of the CPU games channel/table/stats entirely
+    rather than showing up as noise nobody needs to act on."""
+    return game["home"] in roster or game["away"] in roster
 
 
 def _split_matchup_line(line: str) -> tuple[str, str]:
@@ -1522,11 +1530,12 @@ async def _refresh_week_tables_impl(bot: commands.Bot, cog: "Scheduling", week: 
     if not week_data:
         return
 
+    roster = load_roster()
     changed = False
 
     # --- CPU games table ---
     cpu_channel_id = week_data.get("cpu_channel_id")
-    cpu_games = [g for g in week_data.get("games", []) if g["type"] == "cpu"]
+    cpu_games = [g for g in week_data.get("games", []) if g["type"] == "cpu" and game_has_league_user(g, roster)]
     if cpu_channel_id and cpu_games:
         channel = bot.get_channel(cpu_channel_id)
         if channel is None:
@@ -2373,7 +2382,7 @@ class Scheduling(commands.Cog):
                 g["type"] = new_type
 
             user_games = [g for g in week_data["games"] if g["type"] == "user"]
-            cpu_games = [g for g in week_data["games"] if g["type"] == "cpu"]
+            cpu_games = [g for g in week_data["games"] if g["type"] == "cpu" and game_has_league_user(g, roster)]
             # Use whatever was already saved, but let the admin override/backfill it —
             # weeks that crashed under an older build may never have had a deadline saved.
             deadline = deadline or week_data.get("deadline")
