@@ -1276,10 +1276,15 @@ def _split_matchup_line(line: str) -> tuple[str, str]:
 
 
 def resolve_target_week(season: dict, target: str) -> tuple[int, str]:
-    """Resolve 'current' or 'next' to an actual week number.
-    Returns (week_number, description_for_confirmation).
-    In Preseason, all staging targets Week 0. In Conference Championships,
-    all staging targets the dedicated sentinel week (there's only ever one)."""
+    """Resolve 'current', 'next', or 'conference_championships' to an actual
+    week number. Returns (week_number, description_for_confirmation).
+    In Preseason, 'current'/'next' both target Week 0. Explicitly picking
+    'conference_championships' always targets the dedicated sentinel week
+    regardless of current stage -- lets admins pre-stage those matchups
+    during Regular Season, ahead of the actual stage transition, rather than
+    only being able to stage them once already in that stage."""
+    if target == "conference_championships":
+        return CONFERENCE_CHAMPIONSHIP_WEEK, "Conference Championship"
     if season.get("current_stage") == "preseason":
         return 0, "Week 0 (Preseason)"
     if season.get("current_stage") == "conference_championships":
@@ -1935,6 +1940,7 @@ class Scheduling(commands.Cog):
     @app_commands.choices(target=[
         app_commands.Choice(name="Current Week", value="current"),
         app_commands.Choice(name="Next Week", value="next"),
+        app_commands.Choice(name="Conference Championship", value="conference_championships"),
     ])
     async def add_game(self, interaction: discord.Interaction, target: str, away: str, home: str):
         if not is_admin(interaction):
@@ -2020,6 +2026,7 @@ class Scheduling(commands.Cog):
     @app_commands.choices(target=[
         app_commands.Choice(name="Current Week", value="current"),
         app_commands.Choice(name="Next Week", value="next"),
+        app_commands.Choice(name="Conference Championship", value="conference_championships"),
     ])
     async def add_games_bulk(self, interaction: discord.Interaction, target: str, file: discord.Attachment):
         if not is_admin(interaction):
@@ -2072,7 +2079,7 @@ class Scheduling(commands.Cog):
                 teams_in_use[g["away"]] = g["away"]
             state = {
                 "week_data": week_data,
-                "week_label": f"Week {week_num}",
+                "week_label": week_display_name(week_num),
                 "teams_in_use": teams_in_use,
                 "game_number": len(week_data["games"]) + 1,
                 "added": [],
@@ -2088,6 +2095,18 @@ class Scheduling(commands.Cog):
 
             header_match = re.match(r"^(?:week|wk)\s*#?\s*(\d+)\s*:?\s*$", line, re.IGNORECASE)
             if header_match:
+                if target == "conference_championships" or season.get("current_stage") == "conference_championships":
+                    # Conference Championships has exactly one game-week (the
+                    # sentinel) -- a numbered header here would silently target
+                    # a real regular-season week instead, whether that's
+                    # already-played history or a future week that hasn't
+                    # happened yet.
+                    errors.append(
+                        f"Line {line_num}: \"{line}\" -- Week headers aren't used for "
+                        f"Conference Championships (there's only one game-week). Skipped "
+                        f"this line; just list matchups directly with no header."
+                    )
+                    continue
                 active_week_num = int(header_match.group(1))
                 state = get_week_state(active_week_num)
                 if state["blocked"] and not state.get("blocked_reported"):
@@ -2198,6 +2217,7 @@ class Scheduling(commands.Cog):
     @app_commands.choices(target=[
         app_commands.Choice(name="Current Week", value="current"),
         app_commands.Choice(name="Next Week", value="next"),
+        app_commands.Choice(name="Conference Championship", value="conference_championships"),
     ])
     async def remove_game(self, interaction: discord.Interaction, target: str, game: str):
         if not is_admin(interaction):
@@ -2244,6 +2264,7 @@ class Scheduling(commands.Cog):
     @app_commands.choices(target=[
         app_commands.Choice(name="Current Week", value="current"),
         app_commands.Choice(name="Next Week", value="next"),
+        app_commands.Choice(name="Conference Championship", value="conference_championships"),
     ])
     async def view_week(self, interaction: discord.Interaction, target: str):
         season = load_season()
