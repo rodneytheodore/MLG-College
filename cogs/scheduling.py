@@ -265,22 +265,46 @@ PHASE_DISPLAY = {k: v["display"] for k, v in PHASE_TRANSITIONS.items()}
 # earlier in the same dynasty. This sentinel keeps it in its own namespace.
 CONFERENCE_CHAMPIONSHIP_WEEK = -1
 
+# Postseason reuses the same "week 1-4" concept as Regular Season, but Regular
+# Season's weeks 1-16 are already used (and permanently marked "active" --
+# nothing ever clears that) earlier in the same dynasty year. Storing
+# Postseason's weeks under the same keys would silently reuse Regular
+# Season's old week 1-4 records, or outright block advancing (since those
+# keys are still marked "active"). This offset keeps them in their own
+# namespace: bowl week N is stored at POSTSEASON_WEEK_OFFSET - N.
+POSTSEASON_WEEK_OFFSET = -100
+
+
+def postseason_week_to_storage(bowl_week: int) -> int:
+    return POSTSEASON_WEEK_OFFSET - bowl_week
+
+
+def storage_to_postseason_week(stored_week: int) -> int:
+    return POSTSEASON_WEEK_OFFSET - stored_week
+
+
+def is_postseason_storage_week(week: int | None) -> bool:
+    return week is not None and POSTSEASON_WEEK_OFFSET - 4 <= week <= POSTSEASON_WEEK_OFFSET - 1
+
 
 def week_display_name(week: int | None) -> str:
     """User-facing label for a week number -- handles the Conference
-    Championship sentinel specially, since "Week -1" would be meaningless
-    to anyone reading it."""
+    Championship sentinel and Postseason's offset storage keys specially,
+    since neither is meaningful to anyone reading it as a raw number."""
     if week == CONFERENCE_CHAMPIONSHIP_WEEK:
         return "Conference Championship"
+    if is_postseason_storage_week(week):
+        return f"Bowl Week {storage_to_postseason_week(week)}"
     return f"Week {week}"
 
 
 def week_channel_slug(week: int | None) -> str:
     """Channel-name-safe slug for a week number, e.g. for
-    'week-3-user-games'. Same Conference Championship special-case as
-    week_display_name()."""
+    'week-3-user-games'. Same special-casing as week_display_name()."""
     if week == CONFERENCE_CHAMPIONSHIP_WEEK:
         return "conf-champs"
+    if is_postseason_storage_week(week):
+        return f"bowl-week-{storage_to_postseason_week(week)}"
     return f"week-{week}"
 
 
@@ -352,6 +376,10 @@ def week_cap_reached(phase_key: str, current_week: int | None) -> bool:
         # already been created (current_week holds the sentinel once it has),
         # not a numeric >= comparison against a real week count.
         return current_week == CONFERENCE_CHAMPIONSHIP_WEEK
+    if phase_key == "postseason":
+        if current_week is None or not is_postseason_storage_week(current_week):
+            return False  # haven't created any postseason week yet
+        return storage_to_postseason_week(current_week) >= 4
     info = get_phase(phase_key)
     week_cap = info.get("week_cap")
     if not info.get("has_weeks") or week_cap is None:
@@ -480,6 +508,12 @@ class AdvanceWeekWizard:
     def next_week_num(self) -> int:
         if self.current_stage == "conference_championships":
             return CONFERENCE_CHAMPIONSHIP_WEEK
+        if self.current_stage == "postseason":
+            if self.current_week is not None and is_postseason_storage_week(self.current_week):
+                current_bowl_week = storage_to_postseason_week(self.current_week)
+            else:
+                current_bowl_week = 0  # haven't created any postseason week yet
+            return postseason_week_to_storage(current_bowl_week + 1)
         return self.current_week + 1
 
     @property
@@ -1290,13 +1324,26 @@ def resolve_target_week(season: dict, target: str) -> tuple[int, str]:
     'conference_championships' always targets the dedicated sentinel week
     regardless of current stage -- lets admins pre-stage those matchups
     during Regular Season, ahead of the actual stage transition, rather than
-    only being able to stage them once already in that stage."""
+    only being able to stage them once already in that stage. In Postseason,
+    'current'/'next' resolve to that bowl week's own offset storage key, not
+    a plain 1-4 number, since Regular Season's weeks 1-4 already used those
+    keys earlier in the same dynasty year."""
     if target == "conference_championships":
         return CONFERENCE_CHAMPIONSHIP_WEEK, "Conference Championship"
     if season.get("current_stage") == "preseason":
         return 0, "Week 0 (Preseason)"
     if season.get("current_stage") == "conference_championships":
         return CONFERENCE_CHAMPIONSHIP_WEEK, "Conference Championship"
+    if season.get("current_stage") == "postseason":
+        current_week = season.get("current_week")
+        if current_week is not None and is_postseason_storage_week(current_week):
+            current_bowl_week = storage_to_postseason_week(current_week)
+        else:
+            current_bowl_week = 0
+        bowl_week = max(current_bowl_week, 1) if target == "current" else current_bowl_week + 1
+        storage_week = postseason_week_to_storage(bowl_week)
+        suffix = "current" if target == "current" else "next"
+        return storage_week, f"Bowl Week {bowl_week} ({suffix})"
     current_week = season.get("current_week") or 0
     if target == "current":
         week = max(current_week, 1)
@@ -1946,11 +1993,6 @@ class Scheduling(commands.Cog):
         away="Away team",
         home="Home team",
     )
-    @app_commands.choices(target=[
-        app_commands.Choice(name="Current Week", value="current"),
-        app_commands.Choice(name="Next Week", value="next"),
-        app_commands.Choice(name="Conference Championship", value="conference_championships"),
-    ])
     async def add_game(self, interaction: discord.Interaction, target: str, away: str, home: str):
         if not is_admin(interaction):
             await send_ephemeral(interaction, "Only admins can add games.")
@@ -2026,17 +2068,43 @@ class Scheduling(commands.Cog):
     async def add_game_away_autocomplete(self, interaction: discord.Interaction, current: str):
         return await self.team_autocomplete(interaction, current)
 
+    @add_game.autocomplete("target")
+    async def add_game_target_autocomplete(self, interaction: discord.Interaction, current: str):
+        return await self.target_week_autocomplete(interaction, current)
+
+    async def target_week_autocomplete(self, interaction: discord.Interaction, current: str):
+        """Dynamic labels showing the actual week number each target resolves
+        to right now -- a static Choice list can't reflect that, since "Next
+        Week" means Week 15 today and Week 16 tomorrow."""
+        season = load_season()
+        stage = season.get("current_stage")
+
+        choices = []
+        if stage in ("preseason", "conference_championships"):
+            # 'current' and 'next' collapse to the same dedicated week in
+            # these stages, so offer one option instead of two identical ones.
+            week_num, _ = resolve_target_week(season, "current")
+            choices.append(app_commands.Choice(name=f"Current/Next Week ({week_display_name(week_num)})", value="current"))
+        else:
+            cur_num, _ = resolve_target_week(season, "current")
+            next_num, _ = resolve_target_week(season, "next")
+            choices.append(app_commands.Choice(name=f"Current Week ({week_display_name(cur_num)})", value="current"))
+            choices.append(app_commands.Choice(name=f"Next Week ({week_display_name(next_num)})", value="next"))
+
+        if stage != "conference_championships":
+            # Always offer this explicitly so games can be pre-staged during
+            # Regular Season, ahead of the actual stage transition.
+            choices.append(app_commands.Choice(name="Conference Championship", value="conference_championships"))
+
+        current_lower = current.lower()
+        return [c for c in choices if current_lower in c.name.lower()][:25]
+
     @app_commands.command(name="add_games_bulk", description="Add matchups from a text file — supports a whole season with 'Week N:' headers (admin only)")
     @app_commands.describe(
         target="Which week to use for lines before any 'Week N:' header (ignored once a header appears)",
         file="A .txt file. Either one matchup per line ('Georgia @ Alabama'), or a whole season using "
              "'Week 1:' / 'Week 2:' headers to switch weeks partway through the file.",
     )
-    @app_commands.choices(target=[
-        app_commands.Choice(name="Current Week", value="current"),
-        app_commands.Choice(name="Next Week", value="next"),
-        app_commands.Choice(name="Conference Championship", value="conference_championships"),
-    ])
     async def add_games_bulk(self, interaction: discord.Interaction, target: str, file: discord.Attachment):
         if not is_admin(interaction):
             await send_ephemeral(interaction, "Only admins can add games.")
@@ -2221,13 +2289,12 @@ class Scheduling(commands.Cog):
         else:
             await send_ephemeral(interaction, message)
 
+    @add_games_bulk.autocomplete("target")
+    async def add_games_bulk_target_autocomplete(self, interaction: discord.Interaction, current: str):
+        return await self.target_week_autocomplete(interaction, current)
+
     @app_commands.command(name="remove_game", description="Remove a staged matchup from a week (admin only)")
     @app_commands.describe(target="Which week to remove from", game="The matchup to remove")
-    @app_commands.choices(target=[
-        app_commands.Choice(name="Current Week", value="current"),
-        app_commands.Choice(name="Next Week", value="next"),
-        app_commands.Choice(name="Conference Championship", value="conference_championships"),
-    ])
     async def remove_game(self, interaction: discord.Interaction, target: str, game: str):
         if not is_admin(interaction):
             await send_ephemeral(interaction, "Only admins can remove games.")
@@ -2254,6 +2321,10 @@ class Scheduling(commands.Cog):
         save_season(season)
         await send_ephemeral(interaction, f"Removed that matchup from {week_label}.")
 
+    @remove_game.autocomplete("target")
+    async def remove_game_target_autocomplete(self, interaction: discord.Interaction, current: str):
+        return await self.target_week_autocomplete(interaction, current)
+
     @remove_game.autocomplete("game")
     async def remove_game_autocomplete(self, interaction: discord.Interaction, current: str):
         season = load_season()
@@ -2270,11 +2341,6 @@ class Scheduling(commands.Cog):
 
     @app_commands.command(name="view_week", description="Preview a week's staged games")
     @app_commands.describe(target="Which week to view")
-    @app_commands.choices(target=[
-        app_commands.Choice(name="Current Week", value="current"),
-        app_commands.Choice(name="Next Week", value="next"),
-        app_commands.Choice(name="Conference Championship", value="conference_championships"),
-    ])
     async def view_week(self, interaction: discord.Interaction, target: str):
         season = load_season()
         week, week_label = resolve_target_week(season, target)
@@ -2292,6 +2358,10 @@ class Scheduling(commands.Cog):
             lines.append(f"- {away} vs {home} ({g['type'].upper()})")
 
         await send_ephemeral(interaction, "\n".join(lines))
+
+    @view_week.autocomplete("target")
+    async def view_week_target_autocomplete(self, interaction: discord.Interaction, current: str):
+        return await self.target_week_autocomplete(interaction, current)
 
     @app_commands.command(name="advance_week", description="Advance to the next week or stage (admin only)")
     async def advance_week(self, interaction: discord.Interaction):
