@@ -105,9 +105,6 @@ def build_eligible_teams_embed(draft: dict) -> discord.Embed:
         if entry.get("picked_team")
     }
 
-    limits = _effective_conference_limits(draft)
-    picked_counts = _picked_counts_by_conference(draft)
-
     total_teams = 0
     section_blocks = []
 
@@ -129,11 +126,7 @@ def build_eligible_teams_embed(draft: dict) -> discord.Embed:
             else:
                 lines.append(f"⬜ {name}")
 
-        max_cap = limits.get(conf, {}).get("max")
-        is_locked = max_cap is not None and picked_counts.get(conf, 0) >= max_cap
-        header = f"**{conf}** ❌ *(locked — max reached)*" if is_locked else f"**{conf}**"
-
-        section_blocks.append(f"{header}\n" + "\n".join(lines))
+        section_blocks.append(f"**{conf}**\n" + "\n".join(lines))
 
     description = "\n\n".join(section_blocks) if section_blocks else "*(no eligible teams set)*"
 
@@ -431,20 +424,16 @@ def _effective_conference_limits(draft: dict) -> dict[str, dict]:
 
 
 def _teams_by_conference_available(draft: dict) -> dict[str, list[dict]]:
-    """Conference -> list of team dicts, filtered to unclaimed, eligible,
-    and NOT locked out by having already hit its configured max."""
+    """Conference -> list of team dicts, filtered to unclaimed and eligible.
+    Conferences no longer lock out once a max is reached -- only used to be
+    used for the minimum-coverage safety check now (see
+    _min_deficit_after_pick)."""
     by_conf = load_teams_by_conference()
     roster = load_roster()
     eligible = _eligible_set(draft)
-    limits = _effective_conference_limits(draft)
-    counts = _picked_counts_by_conference(draft)
 
     result = {}
     for conf, teams in by_conf.items():
-        max_cap = limits.get(conf, {}).get("max")
-        if max_cap is not None and counts.get(conf, 0) >= max_cap:
-            continue  # conference locked — max already reached
-
         avail = [
             t for t in teams
             if t["abbr"].upper() not in roster
@@ -456,7 +445,7 @@ def _teams_by_conference_available(draft: dict) -> dict[str, list[dict]]:
 
 
 def _available_conferences(draft: dict) -> list[str]:
-    """Conferences that still have at least one unclaimed, eligible, unlocked team."""
+    """Conferences that still have at least one unclaimed, eligible team."""
     return list(_teams_by_conference_available(draft).keys())
 
 
@@ -531,18 +520,6 @@ async def _finalize_pick(interaction: discord.Interaction, abbr: str):
 
     abbr_to_conf = _abbr_to_conference()
     picked_conference = abbr_to_conf.get(abbr)
-
-    limits = _effective_conference_limits(draft)
-    conf_max = limits.get(picked_conference, {}).get("max") if picked_conference else None
-    if conf_max is not None:
-        current_conf_count = _picked_counts_by_conference(draft).get(picked_conference, 0)
-        if current_conf_count >= conf_max:
-            await interaction.edit_original_response(
-                content=f"**{picked_conference}** has already reached its max of {conf_max} team(s). "
-                        f"Click **Make Your Pick** again to choose a different conference.",
-                view=None,
-            )
-            return
 
     remaining_slots_after = len(order) - (current_pick + 1)
     deficit_after = _min_deficit_after_pick(draft, picked_conference)
@@ -725,7 +702,7 @@ def _finish_eligible_teams(
 
     embed = discord.Embed(title="🏈 Eligible Teams Set", description=lines_out, color=discord.Color.blurple())
     embed.set_footer(
-        text=f"{len(selected_abbrs)} teams — {global_min}-{global_max} teams per conference"
+        text=f"{len(selected_abbrs)} teams — min {global_min} per conference (max {global_max} no longer enforced)"
     )
 
     warning = ""
@@ -804,8 +781,9 @@ class EligibleTeamsWizard:
         )
         content = (
             f"**{conference}** ({self.index + 1}/{len(self.conferences)}) — select eligible teams. "
-            f"*(The draft will still cap this conference at {self.global_min}-{self.global_max} pick(s) — "
-            f"you can add more teams here than that to give a bigger pool to choose from.)*"
+            f"*(The min ({self.global_min}) still guarantees other conferences get covered — "
+            f"picks are no longer capped once a conference hits {self.global_max}, so add as many "
+            f"teams here as you want in the pool.)*"
         )
         await interaction.response.edit_message(content=content, view=view)
 
