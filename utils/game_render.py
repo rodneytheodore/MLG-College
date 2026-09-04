@@ -39,11 +39,15 @@ VS_COL_WIDTH_LOGICAL = 36
 
 MIN_TEAM_COL_WIDTH_LOGICAL = 140
 MIN_STATUS_COL_WIDTH_LOGICAL = 120
+MIN_TYPE_COL_WIDTH_LOGICAL = 90
 MAX_TEAM_COL_WIDTH_LOGICAL = 260
 MAX_STATUS_COL_WIDTH_LOGICAL = 200
+MAX_TYPE_COL_WIDTH_LOGICAL = 140
 
 STATUS_PILL_PAD_X_LOGICAL = 12
 STATUS_PILL_PAD_Y_LOGICAL = 6
+TYPE_PILL_PAD_X_LOGICAL = 12
+TYPE_PILL_PAD_Y_LOGICAL = 6
 
 HEADER_HEIGHT_LOGICAL = 42
 HEADER_FONT_SIZE_LOGICAL = 17
@@ -55,6 +59,12 @@ STATUS_COLORS = {
     "done": ((45, 74, 58), (87, 242, 135)),
     "sched": ((45, 54, 84), (142, 161, 255)),
     "pending": ((58, 60, 65), (200, 202, 205)),
+}
+
+# Game-type pill colors: (background, foreground) per type.
+TYPE_COLORS = {
+    "user": ((53, 45, 84), (177, 142, 255)),
+    "cpu": ((58, 60, 65), (170, 172, 176)),
 }
 
 ROW_HEIGHT = ROW_HEIGHT_LOGICAL * SCALE
@@ -73,11 +83,15 @@ VS_COL_WIDTH = VS_COL_WIDTH_LOGICAL * SCALE
 
 MIN_TEAM_COL_WIDTH = MIN_TEAM_COL_WIDTH_LOGICAL * SCALE
 MIN_STATUS_COL_WIDTH = MIN_STATUS_COL_WIDTH_LOGICAL * SCALE
+MIN_TYPE_COL_WIDTH = MIN_TYPE_COL_WIDTH_LOGICAL * SCALE
 MAX_TEAM_COL_WIDTH = MAX_TEAM_COL_WIDTH_LOGICAL * SCALE
 MAX_STATUS_COL_WIDTH = MAX_STATUS_COL_WIDTH_LOGICAL * SCALE
+MAX_TYPE_COL_WIDTH = MAX_TYPE_COL_WIDTH_LOGICAL * SCALE
 
 STATUS_PILL_PAD_X = STATUS_PILL_PAD_X_LOGICAL * SCALE
 STATUS_PILL_PAD_Y = STATUS_PILL_PAD_Y_LOGICAL * SCALE
+TYPE_PILL_PAD_X = TYPE_PILL_PAD_X_LOGICAL * SCALE
+TYPE_PILL_PAD_Y = TYPE_PILL_PAD_Y_LOGICAL * SCALE
 
 HEADER_HEIGHT = HEADER_HEIGHT_LOGICAL * SCALE
 HEADER_FONT_SIZE = HEADER_FONT_SIZE_LOGICAL * SCALE
@@ -140,10 +154,10 @@ def _resize_to_square(img: Image.Image, size: int) -> Image.Image:
     return square
 
 
-def _draw_status_pill(draw, x: int, y: int, row_height: int, text: str, kind: str, font, pill_width: int) -> None:
-    bg, fg = STATUS_COLORS.get(kind, STATUS_COLORS["pending"])
+def _draw_pill(draw, x: int, y: int, row_height: int, text: str, colors: dict, kind: str, font, font_size: int, pill_width: int, pad_y: int) -> None:
+    bg, fg = colors.get(kind, next(iter(colors.values())))
     text_w = draw.textlength(text, font=font)
-    pill_height = STATUS_FONT_SIZE + STATUS_PILL_PAD_Y * 2
+    pill_height = font_size + pad_y * 2
     pill_y = y + (row_height - pill_height) // 2
     try:
         draw.rounded_rectangle((x, pill_y, x + pill_width, pill_y + pill_height), radius=pill_height // 2, fill=bg)
@@ -151,15 +165,16 @@ def _draw_status_pill(draw, x: int, y: int, row_height: int, text: str, kind: st
         # Older Pillow without rounded_rectangle -- a plain rect is still legible.
         draw.rectangle((x, pill_y, x + pill_width, pill_y + pill_height), fill=bg)
     text_x = x + (pill_width - text_w) // 2
-    draw.text((text_x, pill_y + STATUS_PILL_PAD_Y), text, font=font, fill=fg)
+    draw.text((text_x, pill_y + pad_y), text, font=font, fill=fg)
 
 
-def _draw_header(draw, font, card_width: int, away_x: int, home_x: int, status_x: int) -> None:
+def _draw_header(draw, font, card_width: int, away_x: int, home_x: int, type_x: int, status_x: int) -> None:
     draw.rectangle((0, 0, card_width, HEADER_HEIGHT), fill=HEADER_BG_COLOR[:3])
     label_y = (HEADER_HEIGHT - HEADER_FONT_SIZE) // 2
 
     draw.text((away_x, label_y), "AWAY", font=font, fill=HEADER_TEXT_COLOR)
     draw.text((home_x, label_y), "HOME", font=font, fill=HEADER_TEXT_COLOR)
+    draw.text((type_x, label_y), "TYPE", font=font, fill=HEADER_TEXT_COLOR)
     draw.text((status_x, label_y), "STATUS", font=font, fill=HEADER_TEXT_COLOR)
 
     draw.line((0, HEADER_HEIGHT, card_width, HEADER_HEIGHT), fill=DIVIDER_COLOR, width=1 * SCALE)
@@ -167,9 +182,10 @@ def _draw_header(draw, font, card_width: int, away_x: int, home_x: int, status_x
 
 async def build_game_table_file(rows: list[dict]) -> discord.File | None:
     """rows: list of dicts with keys away_name, away_logo_url, home_name,
-    home_logo_url, status_label (display text), status_kind ('done' /
-    'sched' / 'pending' -- controls pill color). Returns a discord.File
-    ready to attach, or None if rows is empty.
+    home_logo_url, game_type_label ('USER' or 'CPU'), game_type_kind
+    ('user' / 'cpu' -- controls pill color), status_label (display text),
+    status_kind ('done' / 'sched' / 'pending' -- controls pill color).
+    Returns a discord.File ready to attach, or None if rows is empty.
 
     Pass a single-item list to get one game's "card" -- used for per-thread
     posts so they share the exact same look as a channel table row."""
@@ -191,11 +207,14 @@ async def build_game_table_file(rows: list[dict]) -> discord.File | None:
 
     away_texts = [row["away_name"] for row in rows]
     home_texts = [row["home_name"] for row in rows]
+    type_texts = [row.get("game_type_label") or "CPU" for row in rows]
     status_texts = [row.get("status_label") or "Pending" for row in rows]
 
     measure_draw = ImageDraw.Draw(Image.new("RGB", (1, 1)))
     away_col_width = _col_width(measure_draw, away_texts, team_font, "AWAY", header_font, MIN_TEAM_COL_WIDTH, MAX_TEAM_COL_WIDTH)
     home_col_width = _col_width(measure_draw, home_texts, team_font, "HOME", header_font, MIN_TEAM_COL_WIDTH, MAX_TEAM_COL_WIDTH)
+    type_text_width = max([measure_draw.textlength(t, font=status_font) for t in type_texts] + [0])
+    type_col_width = int(max(MIN_TYPE_COL_WIDTH, min(type_text_width + TYPE_PILL_PAD_X * 2, MAX_TYPE_COL_WIDTH)))
     status_text_width = max([measure_draw.textlength(t, font=status_font) for t in status_texts] + [0])
     status_col_width = int(max(MIN_STATUS_COL_WIDTH, min(status_text_width + STATUS_PILL_PAD_X * 2, MAX_STATUS_COL_WIDTH)))
 
@@ -203,14 +222,15 @@ async def build_game_table_file(rows: list[dict]) -> discord.File | None:
     vs_col_x = away_col_x + away_col_width + GAP
     home_logo_x = vs_col_x + VS_COL_WIDTH + GAP
     home_col_x = home_logo_x + LOGO_SIZE + LOGO_TO_TEAM_GAP
-    status_col_x = home_col_x + home_col_width + GAP
+    type_col_x = home_col_x + home_col_width + GAP
+    status_col_x = type_col_x + type_col_width + GAP
     card_width = status_col_x + status_col_width + PADDING_X
 
     canvas_height = HEADER_HEIGHT + TOP_PADDING + ROW_HEIGHT * len(rows) + BOTTOM_PADDING
     canvas = Image.new("RGB", (card_width, canvas_height), CANVAS_BG_COLOR[:3])
     draw = ImageDraw.Draw(canvas)
 
-    _draw_header(draw, header_font, card_width, away_col_x, home_col_x, status_col_x)
+    _draw_header(draw, header_font, card_width, away_col_x, home_col_x, type_col_x, status_col_x)
 
     y = HEADER_HEIGHT + TOP_PADDING
     for i, row in enumerate(rows):
@@ -233,8 +253,11 @@ async def build_game_table_file(rows: list[dict]) -> discord.File | None:
         home_text = _fit_text(draw, home_texts[i], team_font, home_col_width)
         draw.text((home_col_x, y + (ROW_HEIGHT - TEAM_FONT_SIZE) // 2), home_text, font=team_font, fill=(255, 255, 255, 255))
 
+        type_label = _fit_text(draw, type_texts[i], status_font, type_col_width - TYPE_PILL_PAD_X * 2)
+        _draw_pill(draw, type_col_x, y, ROW_HEIGHT, type_label, TYPE_COLORS, row.get("game_type_kind", "cpu"), status_font, STATUS_FONT_SIZE, type_col_width, TYPE_PILL_PAD_Y)
+
         status_label = _fit_text(draw, status_texts[i], status_font, status_col_width - STATUS_PILL_PAD_X * 2)
-        _draw_status_pill(draw, status_col_x, y, ROW_HEIGHT, status_label, row.get("status_kind", "pending"), status_font, status_col_width)
+        _draw_pill(draw, status_col_x, y, ROW_HEIGHT, status_label, STATUS_COLORS, row.get("status_kind", "pending"), status_font, STATUS_FONT_SIZE, status_col_width, STATUS_PILL_PAD_Y)
 
         y += ROW_HEIGHT
         if i < len(rows) - 1:
