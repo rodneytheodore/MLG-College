@@ -379,55 +379,8 @@ def _abbr_to_conference() -> dict[str, str]:
     return mapping
 
 
-def _picked_counts_by_conference(draft: dict) -> dict[str, int]:
-    """How many picks have already been made from each conference, based on
-    the draft order's picked_team fields (not the whole league roster —
-    this stays accurate even if /assign_team was used outside the draft)."""
-    abbr_to_conf = _abbr_to_conference()
-    counts: dict[str, int] = {}
-    for entry in draft.get("order", []):
-        abbr = entry.get("picked_team")
-        if not abbr:
-            continue
-        conf = abbr_to_conf.get(abbr.upper())
-        if conf:
-            counts[conf] = counts.get(conf, 0) + 1
-    return counts
-
-
-def _effective_conference_limits(draft: dict) -> dict[str, dict]:
-    """Derives per-conference {min, max} from the single global min/max,
-    clamped to how many eligible teams actually exist in each conference
-    (so a global min never exceeds what a conference can supply)."""
-    global_min = draft.get("team_min_per_conference")
-    global_max = draft.get("team_max_per_conference")
-    if global_min is None and global_max is None:
-        return {}
-
-    eligible = draft.get("eligible_teams")
-    if not eligible:
-        return {}
-
-    abbr_to_conf = _abbr_to_conference()
-    eligible_counts: dict[str, int] = {}
-    for abbr in eligible:
-        conf = abbr_to_conf.get(abbr.upper())
-        if conf:
-            eligible_counts[conf] = eligible_counts.get(conf, 0) + 1
-
-    limits = {}
-    for conf, count in eligible_counts.items():
-        eff_min = min(global_min if global_min is not None else 0, count)
-        eff_max = min(global_max if global_max is not None else count, count)
-        limits[conf] = {"min": eff_min, "max": eff_max}
-    return limits
-
-
 def _teams_by_conference_available(draft: dict) -> dict[str, list[dict]]:
-    """Conference -> list of team dicts, filtered to unclaimed and eligible.
-    Conferences no longer lock out once a max is reached -- only used to be
-    used for the minimum-coverage safety check now (see
-    _min_deficit_after_pick)."""
+    """Conference -> list of team dicts, filtered to unclaimed and eligible."""
     by_conf = load_teams_by_conference()
     roster = load_roster()
     eligible = _eligible_set(draft)
@@ -447,23 +400,6 @@ def _teams_by_conference_available(draft: dict) -> dict[str, list[dict]]:
 def _available_conferences(draft: dict) -> list[str]:
     """Conferences that still have at least one unclaimed, eligible team."""
     return list(_teams_by_conference_available(draft).keys())
-
-
-def _min_deficit_after_pick(draft: dict, picked_conference: str | None) -> int:
-    """Total remaining minimum-team obligations across all conferences,
-    assuming the hypothetical pick from picked_conference has just happened.
-    Used to block a pick that would make some other conference's minimum
-    impossible to reach with the slots left."""
-    limits = _effective_conference_limits(draft)
-    counts = _picked_counts_by_conference(draft)
-    if picked_conference:
-        counts[picked_conference] = counts.get(picked_conference, 0) + 1
-
-    deficit = 0
-    for conf, lim in limits.items():
-        min_v = lim.get("min", 0)
-        deficit += max(0, min_v - counts.get(conf, 0))
-    return deficit
 
 
 async def _finalize_pick(interaction: discord.Interaction, abbr: str):
@@ -514,22 +450,6 @@ async def _finalize_pick(interaction: discord.Interaction, abbr: str):
         owner_id = roster[abbr]["user_id"]
         await interaction.edit_original_response(
             content=f"`{abbr}` was just claimed by <@{owner_id}>. Click **Make Your Pick** again to choose another team.",
-            view=None,
-        )
-        return
-
-    abbr_to_conf = _abbr_to_conference()
-    picked_conference = abbr_to_conf.get(abbr)
-
-    remaining_slots_after = len(order) - (current_pick + 1)
-    deficit_after = _min_deficit_after_pick(draft, picked_conference)
-    if deficit_after > remaining_slots_after:
-        await interaction.edit_original_response(
-            content=(
-                f"Picking **{teams[abbr]['name']}** would leave only {remaining_slots_after} pick(s) remaining, "
-                f"but {deficit_after} more pick(s) are still required to satisfy conference minimums. "
-                f"Click **Make Your Pick** again and choose a team from a conference that still needs coverage."
-            ),
             view=None,
         )
         return
@@ -685,13 +605,9 @@ class DraftPickButtonView(discord.ui.View):
         await interaction.response.send_message("**Select a conference:**", view=view, ephemeral=True)
 
 
-def _finish_eligible_teams(
-    draft: dict, selected_abbrs: list[str], global_min: int, global_max: int
-) -> tuple[discord.Embed, str]:
-    """Saves eligible_teams + global min/max and builds the confirmation embed + optional warning text."""
+def _finish_eligible_teams(draft: dict, selected_abbrs: list[str]) -> tuple[discord.Embed, str]:
+    """Saves eligible_teams and builds the confirmation embed + optional warning text."""
     draft["eligible_teams"] = selected_abbrs
-    draft["team_min_per_conference"] = global_min
-    draft["team_max_per_conference"] = global_max
     save_draft(draft)
 
     teams = load_teams()
@@ -701,9 +617,7 @@ def _finish_eligible_teams(
         lines_out = "*(none selected — draft pool restriction cleared)*"
 
     embed = discord.Embed(title="🏈 Eligible Teams Set", description=lines_out, color=discord.Color.blurple())
-    embed.set_footer(
-        text=f"{len(selected_abbrs)} teams — min {global_min} per conference (max {global_max} no longer enforced)"
-    )
+    embed.set_footer(text=f"{len(selected_abbrs)} teams")
 
     warning = ""
     existing_order = draft.get("order")
@@ -718,17 +632,14 @@ def _finish_eligible_teams(
 
 
 class EligibleTeamsWizard:
-    """First sets a single global min/max eligible-team range, then walks
-    through admin-chosen conferences one at a time, multi-selecting teams
-    within that range (clamped per conference to however many teams it has).
-    Supports Back at every step, restoring prior selections."""
+    """Walks through admin-chosen conferences one at a time, multi-selecting
+    which teams from each go into the eligible pool. Supports Back at every
+    step, restoring prior selections."""
 
     def __init__(self, conferences: list[str]):
         self.conferences = conferences
         self.index = 0
         self.per_conf_selections: dict[str, list[str]] = {}
-        self.global_min = 0
-        self.global_max = 0
         self.by_conf = load_teams_by_conference()
 
     def current_conference(self) -> str:
@@ -736,9 +647,6 @@ class EligibleTeamsWizard:
 
     def team_count_for(self, conference: str) -> int:
         return len(self.by_conf.get(conference, []))
-
-    def max_possible_across_selected(self) -> int:
-        return max((self.team_count_for(c) for c in self.conferences), default=0)
 
     def flat_selected_abbrs(self) -> list[str]:
         result: list[str] = []
@@ -750,20 +658,6 @@ class EligibleTeamsWizard:
         """Called from the conference-select's own callback (a component
         interaction), so this edits that same message rather than sending
         a new one."""
-        view = GlobalMinMaxView(self)
-        await interaction.response.edit_message(
-            content="**Set a global min/max eligible teams per conference:**", view=view
-        )
-
-    async def show_global_min_max(self, interaction: discord.Interaction):
-        view = GlobalMinMaxView(self, initial_min=self.global_min, initial_max=self.global_max)
-        await interaction.response.edit_message(
-            content="**Set a global min/max eligible teams per conference:**", view=view
-        )
-
-    async def start_conference_selection(self, interaction: discord.Interaction, min_v: int, max_v: int):
-        self.global_min = min_v
-        self.global_max = max_v
         await self._show_team_select(interaction)
 
     async def _show_team_select(self, interaction: discord.Interaction):
@@ -776,15 +670,10 @@ class EligibleTeamsWizard:
             return
 
         view = ConferenceTeamMultiSelectView(
-            self, conference, teams, self.global_min, self.global_max,
+            self, conference, teams,
             preselected=self.per_conf_selections.get(conference),
         )
-        content = (
-            f"**{conference}** ({self.index + 1}/{len(self.conferences)}) — select eligible teams. "
-            f"*(The min ({self.global_min}) still guarantees other conferences get covered — "
-            f"picks are no longer capped once a conference hits {self.global_max}, so add as many "
-            f"teams here as you want in the pool.)*"
-        )
+        content = f"**{conference}** ({self.index + 1}/{len(self.conferences)}) — select eligible teams."
         await interaction.response.edit_message(content=content, view=view)
 
     async def after_conference_selection(self, interaction: discord.Interaction, selected: list[str]):
@@ -799,93 +688,25 @@ class EligibleTeamsWizard:
 
     async def go_back_from_team_select(self, interaction: discord.Interaction):
         if self.index == 0:
-            await self.show_global_min_max(interaction)
+            view = EligibleConferenceSelectView(preselected=self.conferences)
+            await interaction.response.edit_message(
+                content="**Select conferences to pull eligible teams from:**", view=view
+            )
         else:
             self.index -= 1
             await self._show_team_select(interaction)
 
     async def _finish(self, interaction: discord.Interaction):
         draft = load_draft()
-        embed, warning = _finish_eligible_teams(
-            draft, self.flat_selected_abbrs(), self.global_min, self.global_max
-        )
+        embed, warning = _finish_eligible_teams(draft, self.flat_selected_abbrs())
         await interaction.response.edit_message(content=warning or None, embed=embed, view=None)
 
 
-class GlobalMinMaxView(discord.ui.View):
-    """Step 2 — pick ONE min/max eligible team range that applies uniformly
-    to every conference chosen in step 1."""
-
-    def __init__(self, wizard: EligibleTeamsWizard, initial_min: int | None = None, initial_max: int | None = None):
-        super().__init__(timeout=180)
-        self.wizard = wizard
-
-        max_possible = wizard.max_possible_across_selected()
-        self.min_value = initial_min if initial_min is not None else 0
-        self.max_value = initial_max if initial_max is not None else max_possible
-
-        min_options = [
-            discord.SelectOption(label=str(i), value=str(i), default=(i == self.min_value))
-            for i in range(max_possible + 1)
-        ]
-        max_options = [
-            discord.SelectOption(label=str(i), value=str(i), default=(i == self.max_value))
-            for i in range(max_possible + 1)
-        ]
-
-        self.min_select = discord.ui.Select(
-            placeholder=f"Minimum teams per conference (currently {self.min_value})",
-            min_values=1, max_values=1, options=min_options, row=0,
-        )
-        self.min_select.callback = self._on_min
-        self.add_item(self.min_select)
-
-        self.max_select = discord.ui.Select(
-            placeholder=f"Maximum teams per conference (currently {self.max_value})",
-            min_values=1, max_values=1, options=max_options, row=1,
-        )
-        self.max_select.callback = self._on_max
-        self.add_item(self.max_select)
-
-        back_btn = discord.ui.Button(label="← Back", style=discord.ButtonStyle.secondary, row=2)
-        back_btn.callback = self._on_back
-        self.add_item(back_btn)
-
-        confirm_btn = discord.ui.Button(label="Continue →", style=discord.ButtonStyle.primary, row=2)
-        confirm_btn.callback = self._on_confirm
-        self.add_item(confirm_btn)
-
-    async def _on_min(self, interaction: discord.Interaction):
-        self.min_value = int(self.min_select.values[0])
-        await interaction.response.defer()
-
-    async def _on_max(self, interaction: discord.Interaction):
-        self.max_value = int(self.max_select.values[0])
-        await interaction.response.defer()
-
-    async def _on_back(self, interaction: discord.Interaction):
-        view = EligibleConferenceSelectView(preselected=self.wizard.conferences)
-        await interaction.response.edit_message(
-            content="**Select conferences to pull eligible teams from:**", view=view
-        )
-
-    async def _on_confirm(self, interaction: discord.Interaction):
-        if self.min_value > self.max_value:
-            await interaction.response.send_message(
-                f"Minimum ({self.min_value}) can't exceed maximum ({self.max_value}). Adjust and try again.",
-                ephemeral=True,
-            )
-            return
-
-        await self.wizard.start_conference_selection(interaction, self.min_value, self.max_value)
-
-
 class ConferenceTeamMultiSelectView(discord.ui.View):
-    """Step 3 (repeated per conference) — multi-select which teams from this
-    conference go into the eligible pool. Unconstrained by the draft-time
-    min/max — the pool can be larger than what's actually draftable."""
+    """Step 2 (repeated per conference) — multi-select which teams from this
+    conference go into the eligible pool."""
 
-    def __init__(self, wizard: EligibleTeamsWizard, conference: str, teams: list[dict], draft_min: int, draft_max: int,
+    def __init__(self, wizard: EligibleTeamsWizard, conference: str, teams: list[dict],
                  preselected: list[str] | None = None):
         super().__init__(timeout=180)
         self.wizard = wizard
@@ -948,56 +769,6 @@ class EligibleConferenceSelectView(discord.ui.View):
         chosen_conferences = self.children[0].values
         wizard = EligibleTeamsWizard(chosen_conferences)
         await wizard.start(interaction)
-
-
-class SetTeamLimitsModal(discord.ui.Modal, title="Adjust Team Limits"):
-    min_input = discord.ui.TextInput(
-        label="Minimum teams per conference",
-        placeholder="e.g. 1",
-        required=True,
-        max_length=2,
-    )
-    max_input = discord.ui.TextInput(
-        label="Maximum teams per conference",
-        placeholder="e.g. 3",
-        required=True,
-        max_length=2,
-    )
-
-    def __init__(self):
-        super().__init__()
-        draft = load_draft()
-        current_min = draft.get("team_min_per_conference")
-        current_max = draft.get("team_max_per_conference")
-        if current_min is not None:
-            self.min_input.default = str(current_min)
-        if current_max is not None:
-            self.max_input.default = str(current_max)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        min_raw = self.min_input.value.strip()
-        max_raw = self.max_input.value.strip()
-
-        if not min_raw.isdigit() or not max_raw.isdigit():
-            await interaction.response.send_message("Enter whole numbers for both fields.", ephemeral=True)
-            return
-
-        min_v, max_v = int(min_raw), int(max_raw)
-        if min_v > max_v:
-            await interaction.response.send_message(
-                f"Minimum ({min_v}) can't exceed maximum ({max_v}).", ephemeral=True
-            )
-            return
-
-        draft = load_draft()
-        draft["team_min_per_conference"] = min_v
-        draft["team_max_per_conference"] = max_v
-        save_draft(draft)
-
-        await interaction.response.send_message(
-            f"✅ Updated: **{min_v}–{max_v} teams per conference.**", ephemeral=True
-        )
-        await _post_draft_order(interaction.guild, [build_draft_order_embed(draft), build_eligible_teams_embed(draft)])
 
 
 class Draft(commands.Cog):
@@ -1128,22 +899,6 @@ class Draft(commands.Cog):
 
         await send_ephemeral(interaction, f"✅ Removed **{teams[abbr]['name']}** from the eligible pool ({len(eligible)} remaining).")
         await _post_draft_order(interaction.guild, [build_draft_order_embed(draft), build_eligible_teams_embed(draft)])
-
-    @app_commands.command(
-        name="set_team_limits",
-        description="Adjust the global min/max teams per conference without redoing team selection (admin only)",
-    )
-    async def set_team_limits(self, interaction: discord.Interaction):
-        if not is_admin(interaction):
-            await send_ephemeral(interaction, "Only admins can modify draft limits.")
-            return
-
-        draft = load_draft()
-        if draft.get("status") in ("drafting", "complete"):
-            await send_ephemeral(interaction, "Can't change draft limits after the draft has started.")
-            return
-
-        await interaction.response.send_modal(SetTeamLimitsModal())
 
     @add_eligible_team.autocomplete("team")
     async def add_eligible_team_autocomplete(self, interaction: discord.Interaction, current: str):
