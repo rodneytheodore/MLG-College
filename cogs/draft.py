@@ -402,10 +402,16 @@ def _available_conferences(draft: dict) -> list[str]:
     return list(_teams_by_conference_available(draft).keys())
 
 
-async def _finalize_pick(interaction: discord.Interaction, abbr: str):
+async def _finalize_pick(interaction: discord.Interaction, abbr: str, admin_override: bool = False):
     """Reloads draft state fresh, re-validates, and completes the pick.
     Called from the team select — this is the single source of truth for
-    committing a pick, whichever path got here."""
+    committing a pick, whichever path got here.
+
+    Pass admin_override=True to let an admin assign the pick on behalf of
+    whoever is currently on the clock (e.g. they're away/AFK) -- this skips
+    the "it's not your turn" check, but the roster entry still always goes
+    to the actual picker (order[current_pick]'s user), never to the admin
+    running the command."""
     # Defer immediately — refresh_roster_channel() (which purges/rebuilds the
     # whole roster channel) and refresh_dashboard() below can easily exceed
     # Discord's 3-second initial-response window, which would otherwise cause
@@ -427,7 +433,7 @@ async def _finalize_pick(interaction: discord.Interaction, abbr: str):
         return
 
     expected_user_id = order[current_pick]["user_id"]
-    if interaction.user.id != expected_user_id:
+    if not admin_override and interaction.user.id != expected_user_id:
         await interaction.edit_original_response(
             content=f"It's not your turn. <@{expected_user_id}> is currently picking.", view=None
         )
@@ -454,7 +460,13 @@ async def _finalize_pick(interaction: discord.Interaction, abbr: str):
         )
         return
 
-    roster[abbr] = {"user_id": interaction.user.id, "username": str(interaction.user)}
+    # Resolve the picker's own Discord identity for the roster entry -- this
+    # must always be whoever is on the clock, never the admin (when
+    # admin_override is used, interaction.user is the admin, not the picker).
+    picker_member = interaction.guild.get_member(expected_user_id)
+    picker_username = str(picker_member) if picker_member else f"user {expected_user_id}"
+
+    roster[abbr] = {"user_id": expected_user_id, "username": picker_username}
     save_roster(roster)
 
     order[current_pick]["picked_team"] = abbr
@@ -470,7 +482,12 @@ async def _finalize_pick(interaction: discord.Interaction, abbr: str):
     await refresh_dashboard(bot)
 
     team_name = teams[abbr]["name"]
-    await interaction.edit_original_response(content=f"✅ You picked **{team_name}**!", view=None)
+    if admin_override:
+        await interaction.edit_original_response(
+            content=f"✅ Assigned **{team_name}** to <@{expected_user_id}> on their behalf.", view=None
+        )
+    else:
+        await interaction.edit_original_response(content=f"✅ You picked **{team_name}**!", view=None)
 
     channel = discord.utils.find(
         lambda c: isinstance(c, discord.TextChannel) and c.name.lower() in DRAFT_CHANNEL_NAMES,
@@ -480,7 +497,8 @@ async def _finalize_pick(interaction: discord.Interaction, abbr: str):
         return
 
     pick_number = current_pick + 1
-    await channel.send(embed=build_pick_announcement_embed(teams[abbr], interaction.user, pick_number))
+    announced_user = picker_member or await bot.fetch_user(expected_user_id)
+    await channel.send(embed=build_pick_announcement_embed(teams[abbr], announced_user, pick_number))
     await channel.send(embeds=[build_draft_order_embed(draft), build_eligible_teams_embed(draft)])
 
     if draft["status"] == "complete":
@@ -909,6 +927,52 @@ class Draft(commands.Cog):
         matches = [
             t for abbr, t in teams.items()
             if abbr not in eligible
+            and (current_lower in t["name"].lower() or current_lower in abbr.lower())
+        ]
+        return [app_commands.Choice(name=t["name"], value=t["abbr"]) for t in matches[:25]]
+
+    @app_commands.command(
+        name="admin_pick",
+        description="Make a pick on behalf of whoever is currently on the clock (admin only)",
+    )
+    @app_commands.describe(team="Team to assign to the current picker")
+    async def admin_pick(self, interaction: discord.Interaction, team: str):
+        if not is_admin(interaction):
+            await send_ephemeral(interaction, "Only admins can make a pick on someone's behalf.")
+            return
+
+        draft = load_draft()
+        if draft.get("status") != "drafting":
+            await send_ephemeral(interaction, "The draft isn't currently in progress.")
+            return
+
+        order = draft.get("order", [])
+        current_pick = draft.get("current_pick", 0)
+        if current_pick >= len(order):
+            await send_ephemeral(interaction, "The draft is already complete.")
+            return
+
+        teams = load_teams()
+        abbr, error = resolve_team(team, teams)
+        if error:
+            await send_ephemeral(interaction, error)
+            return
+
+        await _finalize_pick(interaction, abbr, admin_override=True)
+
+    @admin_pick.autocomplete("team")
+    async def admin_pick_autocomplete(self, interaction: discord.Interaction, current: str):
+        draft = load_draft()
+        if draft.get("status") != "drafting":
+            return []
+        roster = load_roster()
+        teams = load_teams()
+        eligible = _eligible_set(draft)
+        current_lower = current.lower()
+        matches = [
+            t for abbr, t in teams.items()
+            if abbr not in roster
+            and (eligible is None or abbr in eligible)
             and (current_lower in t["name"].lower() or current_lower in abbr.lower())
         ]
         return [app_commands.Choice(name=t["name"], value=t["abbr"]) for t in matches[:25]]
