@@ -854,7 +854,7 @@ class AdvanceWeekWizard:
             return
 
         roster = load_roster()
-        archive_dynasty(season, roster)
+        archive_dynasty(season, roster, load_scheme_cards())
 
         new_year = current_year + 1
         save_season({
@@ -1223,7 +1223,7 @@ class NewDynastyConfirmView(discord.ui.View):
         current_season = load_season()
         current_roster = load_roster()
 
-        archive_dynasty(current_season, current_roster)
+        archive_dynasty(current_season, current_roster, load_scheme_cards())
 
         save_roster({})
         save_season({

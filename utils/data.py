@@ -1,5 +1,6 @@
 import os
 import json
+import re
 import discord
 
 DATA_DIR = os.environ.get("DATA_DIR", ".")
@@ -73,9 +74,13 @@ def save_season(season: dict):
         json.dump(season, f, indent=2)
 
 
-def archive_dynasty(season: dict, roster: dict):
-    """Saves a snapshot of the current season + roster before a reset,
-    tagged with whatever year was stored on the season (or 'unknown')."""
+def archive_dynasty(season: dict, roster: dict, scheme_cards: dict = None):
+    """Saves a snapshot of the current season + roster (+ scheme cards, if
+    passed) before a reset, tagged with whatever year was stored on the
+    season (or 'unknown'). Scheme cards are archived here but -- unlike
+    season/roster -- the live scheme_cards.json is deliberately left alone
+    afterward; owners keep seeing their old card until they overwrite it
+    themselves for the new dynasty."""
     year_label = season.get("year") or "unknown"
     folder = os.path.join(DATA_DIR, "archive")
     os.makedirs(folder, exist_ok=True)
@@ -84,6 +89,39 @@ def archive_dynasty(season: dict, roster: dict):
         json.dump(season, f, indent=2)
     with open(os.path.join(folder, f"roster_{year_label}.json"), "w") as f:
         json.dump(roster, f, indent=2)
+    if scheme_cards is not None:
+        with open(os.path.join(folder, f"scheme_cards_{year_label}.json"), "w") as f:
+            json.dump(scheme_cards, f, indent=2)
+
+
+def load_archived_scheme_cards(year) -> dict:
+    """Reads a past dynasty year's scheme_cards snapshot from archive/.
+    Returns {} if that year was never archived (e.g. pre-dates this feature)."""
+    path = os.path.join(DATA_DIR, "archive", f"scheme_cards_{year}.json")
+    if not os.path.exists(path):
+        return {}
+    with open(path, "r") as f:
+        return json.load(f)
+
+
+def list_archived_scheme_card_years() -> list:
+    """Years that actually have an archived scheme_cards snapshot on disk,
+    newest first -- used to populate the /view_archived_scheme_card autocomplete
+    without offering years that have nothing saved."""
+    folder = os.path.join(DATA_DIR, "archive")
+    if not os.path.isdir(folder):
+        return []
+    years = []
+    for name in os.listdir(folder):
+        m = re.match(r"^scheme_cards_(.+)\.json$", name)
+        if m:
+            years.append(m.group(1))
+    def sort_key(y):
+        try:
+            return (0, -int(y))
+        except ValueError:
+            return (1, y)
+    return sorted(years, key=sort_key)
 
 
 def load_scheme_cards() -> dict:
