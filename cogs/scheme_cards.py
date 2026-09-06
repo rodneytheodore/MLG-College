@@ -17,6 +17,8 @@ from utils.data import (
     is_admin,
     resolve_team,
     true_display_name,
+    load_archived_scheme_cards,
+    list_archived_scheme_card_years,
 )
 from utils.responses import send_ephemeral, send_ephemeral_followup
 from utils.scheme_cards_render import build_scheme_cards_file
@@ -1060,6 +1062,103 @@ class SchemeCards(commands.Cog):
     @view_scheme_card.autocomplete("team")
     async def view_scheme_card_team_autocomplete(self, interaction: discord.Interaction, current: str):
         return await self.team_autocomplete(interaction, current)
+
+    @app_commands.command(name="view_archived_scheme_card", description="View a team's scheme card from a past dynasty year")
+    @app_commands.describe(year="Which archived dynasty year to look in", team="Team to view")
+    async def view_archived_scheme_card(self, interaction: discord.Interaction, year: str, team: str):
+        abbr, error = resolve_team(team, self.teams)
+        if error:
+            await send_ephemeral(interaction, error)
+            return
+
+        cards = load_archived_scheme_cards(year)
+        card = cards.get(abbr)
+        if not card or (not card.get("offense") and not card.get("defense")):
+            await send_ephemeral(interaction, f"No archived scheme card found for **{self.teams[abbr]['name']}** in {year}.")
+            return
+
+        embed = build_scheme_card_embed(self.teams[abbr], card)
+        embed.set_footer(text=f"Archived from {year}")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @view_archived_scheme_card.autocomplete("year")
+    async def view_archived_scheme_card_year_autocomplete(self, interaction: discord.Interaction, current: str):
+        years = list_archived_scheme_card_years()
+        current_lower = current.lower()
+        return [
+            app_commands.Choice(name=y, value=y)
+            for y in years if current_lower in y.lower()
+        ][:25]
+
+    @view_archived_scheme_card.autocomplete("team")
+    async def view_archived_scheme_card_team_autocomplete(self, interaction: discord.Interaction, current: str):
+        return await self.team_autocomplete(interaction, current)
+
+    @app_commands.command(name="copy_scheme_card", description="Copy a scheme card from one team onto another (admin only)")
+    @app_commands.describe(
+        from_team="Team whose scheme card to copy",
+        to_team="Team to attach it to",
+        from_year="Optional: pull from an archived dynasty year instead of the current live card",
+    )
+    async def copy_scheme_card(self, interaction: discord.Interaction, from_team: str, to_team: str, from_year: str = None):
+        if not is_admin(interaction):
+            await send_ephemeral(interaction, "Only admins can copy scheme cards between teams.")
+            return
+
+        from_abbr, error = resolve_team(from_team, self.teams)
+        if error:
+            await send_ephemeral(interaction, error)
+            return
+        to_abbr, error = resolve_team(to_team, self.teams)
+        if error:
+            await send_ephemeral(interaction, error)
+            return
+        if from_abbr == to_abbr:
+            await send_ephemeral(interaction, "Source and destination are the same team.")
+            return
+
+        if from_year:
+            source_cards = load_archived_scheme_cards(from_year)
+            source_label = f"{self.teams[from_abbr]['name']} ({from_year})"
+        else:
+            source_cards = load_scheme_cards()
+            source_label = self.teams[from_abbr]['name']
+
+        card = source_cards.get(from_abbr)
+        if not card or (not card.get("offense") and not card.get("defense")):
+            await send_ephemeral(interaction, f"No scheme card found for **{source_label}**.")
+            return
+
+        cards = load_scheme_cards()
+        existing = cards.get(to_abbr)
+        overwrite_note = ""
+        if existing and (existing.get("offense") or existing.get("defense")):
+            overwrite_note = f" (overwrote **{self.teams[to_abbr]['name']}**'s existing card)"
+
+        # Copy, not reference -- to_abbr's card should be free to diverge from
+        # the source afterward without mutating whatever it was copied from.
+        cards[to_abbr] = json.loads(json.dumps(card))
+        save_scheme_cards(cards)
+
+        await send_ephemeral(interaction, f"✅ Copied **{source_label}**'s scheme card onto **{self.teams[to_abbr]['name']}**{overwrite_note}.")
+        await self.refresh_scheme_cards_channel()
+
+    @copy_scheme_card.autocomplete("from_team")
+    async def copy_scheme_card_from_team_autocomplete(self, interaction: discord.Interaction, current: str):
+        return await self.team_autocomplete(interaction, current)
+
+    @copy_scheme_card.autocomplete("to_team")
+    async def copy_scheme_card_to_team_autocomplete(self, interaction: discord.Interaction, current: str):
+        return await self.team_autocomplete(interaction, current)
+
+    @copy_scheme_card.autocomplete("from_year")
+    async def copy_scheme_card_from_year_autocomplete(self, interaction: discord.Interaction, current: str):
+        years = list_archived_scheme_card_years()
+        current_lower = current.lower()
+        return [
+            app_commands.Choice(name=y, value=y)
+            for y in years if current_lower in y.lower()
+        ][:25]
 
     @app_commands.command(name="view_offense_install", description="View a team's offensive install")
     @app_commands.describe(team="Team to view")
