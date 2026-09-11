@@ -1410,16 +1410,21 @@ def _status_label(game: dict) -> tuple[str, str]:
     return "Pending", "pending"
 
 
-def _build_game_row(cog: "Scheduling", game: dict) -> dict:
-    """Builds one row dict for utils.game_render.build_game_table_file()."""
+def _build_game_row(cog: "Scheduling", game: dict, roster: dict) -> dict:
+    """Builds one row dict for utils.game_render.build_game_table_file().
+    away_user_controlled/home_user_controlled mark which side(s) have a
+    league owner -- a CPU-type game can still have one user-owned side (see
+    game_has_league_user), and nothing else in the table shows which one."""
     home = cog.teams[game["home"]]
     away = cog.teams[game["away"]]
     label, kind = _status_label(game)
     return {
         "away_name": away.get("school") or away["name"],
         "away_logo_url": away.get("logoDark") or away.get("logo"),
+        "away_user_controlled": game["away"] in roster,
         "home_name": home.get("school") or home["name"],
         "home_logo_url": home.get("logoDark") or home.get("logo"),
+        "home_user_controlled": game["home"] in roster,
         "game_type_label": game["type"].upper(),
         "game_type_kind": game["type"],
         "status_label": label,
@@ -1432,7 +1437,8 @@ async def _build_thread_card(cog: "Scheduling", game: dict) -> tuple[discord.Emb
     same render function/style as the channel tables (build_game_table_file),
     just called with a one-item list, so a thread card is guaranteed to look
     identical to that game's row in the channel table."""
-    row = _build_game_row(cog, game)
+    roster = load_roster()
+    row = _build_game_row(cog, game, roster)
     file = await build_game_table_file([row])
     embed = discord.Embed(color=0xFFD700)
     if file is not None:
@@ -1649,7 +1655,7 @@ async def _refresh_week_tables_impl(bot: commands.Bot, cog: "Scheduling", week: 
     if channel is None:
         return
 
-    rows = [_build_game_row(cog, g) for g in all_games]
+    rows = [_build_game_row(cog, g, roster) for g in all_games]
     file = await build_game_table_file(rows)
     embed = discord.Embed(title=f"{week_display_name(week)} — Games", color=0xFFD700)
 

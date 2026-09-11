@@ -36,6 +36,8 @@ STATUS_FONT_SIZE_LOGICAL = 15
 LOGO_TO_TEAM_GAP_LOGICAL = 14
 GAP_LOGICAL = 24
 VS_COL_WIDTH_LOGICAL = 36
+USER_BADGE_SIZE_LOGICAL = 9
+USER_BADGE_OFFSET_LOGICAL = 10
 
 MIN_TEAM_COL_WIDTH_LOGICAL = 140
 MIN_STATUS_COL_WIDTH_LOGICAL = 120
@@ -80,6 +82,8 @@ STATUS_FONT_SIZE = STATUS_FONT_SIZE_LOGICAL * SCALE
 LOGO_TO_TEAM_GAP = LOGO_TO_TEAM_GAP_LOGICAL * SCALE
 GAP = GAP_LOGICAL * SCALE
 VS_COL_WIDTH = VS_COL_WIDTH_LOGICAL * SCALE
+USER_BADGE_SIZE = USER_BADGE_SIZE_LOGICAL * SCALE
+USER_BADGE_OFFSET = USER_BADGE_OFFSET_LOGICAL * SCALE
 
 MIN_TEAM_COL_WIDTH = MIN_TEAM_COL_WIDTH_LOGICAL * SCALE
 MIN_STATUS_COL_WIDTH = MIN_STATUS_COL_WIDTH_LOGICAL * SCALE
@@ -152,6 +156,18 @@ def _resize_to_square(img: Image.Image, size: int) -> Image.Image:
     square = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     square.paste(resized, ((size - new_w) // 2, (size - new_h) // 2), resized)
     return square
+
+
+def _draw_user_badge(draw, x: int, y: int, row_height: int) -> None:
+    """Small filled circle marking a user-controlled team, drawn just after
+    its name in the existing column gap -- an actual shape rather than an
+    emoji/font glyph, same reasoning as top25_render's movement triangles:
+    glyph coverage for symbols is unreliable across fallback fonts and PIL's
+    built-in bitmap font, so a drawn shape is what actually renders."""
+    cy = y + row_height // 2
+    cx = x + USER_BADGE_OFFSET + USER_BADGE_SIZE // 2
+    r = USER_BADGE_SIZE // 2
+    draw.ellipse((cx - r, cy - r, cx + r, cy + r), fill=TYPE_COLORS["user"][1])
 
 
 def _draw_pill(draw, x: int, y: int, row_height: int, text: str, colors: dict, kind: str, font, font_size: int, pill_width: int, pad_y: int) -> None:
@@ -241,6 +257,8 @@ async def build_game_table_file(rows: list[dict]) -> discord.File | None:
 
         away_text = _fit_text(draw, away_texts[i], team_font, away_col_width)
         draw.text((away_col_x, y + (ROW_HEIGHT - TEAM_FONT_SIZE) // 2), away_text, font=team_font, fill=(255, 255, 255, 255))
+        if row.get("away_user_controlled"):
+            _draw_user_badge(draw, away_col_x + away_col_width, y, ROW_HEIGHT)
 
         vs_w = draw.textlength("vs", font=vs_font)
         draw.text((vs_col_x + (VS_COL_WIDTH - vs_w) // 2, y + (ROW_HEIGHT - VS_FONT_SIZE) // 2), "vs", font=vs_font, fill=(109, 111, 120, 255))
@@ -252,6 +270,8 @@ async def build_game_table_file(rows: list[dict]) -> discord.File | None:
 
         home_text = _fit_text(draw, home_texts[i], team_font, home_col_width)
         draw.text((home_col_x, y + (ROW_HEIGHT - TEAM_FONT_SIZE) // 2), home_text, font=team_font, fill=(255, 255, 255, 255))
+        if row.get("home_user_controlled"):
+            _draw_user_badge(draw, home_col_x + home_col_width, y, ROW_HEIGHT)
 
         type_label = _fit_text(draw, type_texts[i], status_font, type_col_width - TYPE_PILL_PAD_X * 2)
         _draw_pill(draw, type_col_x, y, ROW_HEIGHT, type_label, TYPE_COLORS, row.get("game_type_kind", "cpu"), status_font, STATUS_FONT_SIZE, type_col_width, TYPE_PILL_PAD_Y)
