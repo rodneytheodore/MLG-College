@@ -59,6 +59,7 @@ HEADER_TEXT_COLOR = (140, 143, 148, 255)
 # Status pill colors: (background, foreground) per status "kind".
 STATUS_COLORS = {
     "done": ((45, 74, 58), (87, 242, 135)),
+    "force_win": ((74, 62, 30), (240, 182, 87)),
     "sched": ((45, 54, 84), (142, 161, 255)),
     "pending": ((58, 60, 65), (200, 202, 205)),
 }

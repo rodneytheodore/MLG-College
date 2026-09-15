@@ -1124,7 +1124,7 @@ async def _do_advance_week(
             # Buttons live in the thread alongside the ping. The single-row
             # table image gives the thread a card up front, instead of only
             # appearing after the first button click.
-            game_view = CompleteGameView(cog=cog, game_id=g["game_id"], show_schedule_button=True)
+            game_view = CompleteGameView(cog=cog, game=g, show_schedule_button=True)
             thread_embed, thread_file = await _build_thread_card(cog, g)
             await thread.send(
                 f"<@{away_owner_id}> <@{home_owner_id}> use this thread to schedule your game and report completion.{deadline_line}",
@@ -1400,9 +1400,15 @@ async def _delete_channels_for_week(guild, week_data):
     return deleted, errors
 
 
-def _status_label(game: dict) -> tuple[str, str]:
+def _status_label(game: dict, teams: dict) -> tuple[str, str]:
     """Returns (display_label, kind) for a game's status pill. kind is
-    'done' / 'sched' / 'pending', used purely for pill color in the table image."""
+    'done' / 'force_win' / 'sched' / 'pending', used purely for pill color
+    in the table image."""
+    if game.get("status") == "force_win":
+        winner_abbr = game.get("winner")
+        winner_team = teams.get(winner_abbr) if winner_abbr else None
+        winner_name = (winner_team.get("school") or winner_team["name"]) if winner_team else "Unknown"
+        return f"Force Win: {winner_name}", "force_win"
     if game.get("status") == "completed":
         return "Completed", "done"
     if game["type"] == "user":
@@ -1417,7 +1423,7 @@ def _build_game_row(cog: "Scheduling", game: dict, roster: dict) -> dict:
     game_has_league_user), and nothing else in the table shows which one."""
     home = cog.teams[game["home"]]
     away = cog.teams[game["away"]]
-    label, kind = _status_label(game)
+    label, kind = _status_label(game, cog.teams)
     return {
         "away_name": away.get("school") or away["name"],
         "away_logo_url": away.get("logoDark") or away.get("logo"),
@@ -1723,24 +1729,35 @@ async def _sync_channel_card(bot, cog, game, week, week_data, roster, relevant_d
 
 
 class CompleteGameView(discord.ui.View):
-    """Persistent buttons for a game: Mark Completed always present, plus an
-    optional Mark Scheduled button for user games. Survives bot restarts
-    since it's registered with stable custom_ids and timeout=None."""
+    """Persistent buttons for a game: Mark Completed and the two Force Win
+    buttons (one per team) are always present, plus an optional Mark
+    Scheduled button for user games. Survives bot restarts since it's
+    registered with stable custom_ids and timeout=None.
 
-    def __init__(
-        self, cog: "Scheduling", game_id: str,
-        completed: bool = False, scheduled: bool = False, show_schedule_button: bool = False,
-    ):
+    Four possible outcomes, matching the game's own schedule screen
+    terminology: Scheduled, Completed, Force Win {Away}, Force Win {Home}.
+    Only one of Completed / Force Win {Away} / Force Win {Home} can be
+    active at a time -- picking one shows that button as done, but doesn't
+    disable the others, so a wrong click can still be corrected."""
+
+    def __init__(self, cog: "Scheduling", game: dict, show_schedule_button: bool = False):
         super().__init__(timeout=None)
         self.cog = cog
-        self.game_id = game_id
+        self.game_id = game["game_id"]
+        self.away_abbr = game["away"]
+        self.home_abbr = game["home"]
+
+        status = game.get("status")
+        completed = status == "completed"
+        scheduled = game.get("scheduled", False)
+        force_win_abbr = game.get("winner") if status == "force_win" else None
 
         if show_schedule_button:
             schedule_btn = discord.ui.Button(
                 label="📅 Scheduled" if scheduled else "Mark Scheduled",
                 style=discord.ButtonStyle.success if scheduled else discord.ButtonStyle.secondary,
                 disabled=scheduled,
-                custom_id=f"schedule_game:{game_id}",
+                custom_id=f"schedule_game:{self.game_id}",
             )
             schedule_btn.callback = self._on_schedule_click
             self.add_item(schedule_btn)
@@ -1749,10 +1766,34 @@ class CompleteGameView(discord.ui.View):
             label="✅ Completed" if completed else "Mark Completed",
             style=discord.ButtonStyle.success if completed else discord.ButtonStyle.secondary,
             disabled=completed,
-            custom_id=f"complete_game:{game_id}",
+            custom_id=f"complete_game:{self.game_id}",
         )
         complete_btn.callback = self._on_complete_click
         self.add_item(complete_btn)
+
+        away_team = cog.teams[self.away_abbr]
+        away_name = away_team.get("school") or away_team["name"]
+        away_is_winner = force_win_abbr == self.away_abbr
+        away_btn = discord.ui.Button(
+            label=f"✅ {away_name} Force Win" if away_is_winner else f"Force Win: {away_name}",
+            style=discord.ButtonStyle.success if away_is_winner else discord.ButtonStyle.secondary,
+            disabled=away_is_winner,
+            custom_id=f"force_win_game:{self.game_id}:{self.away_abbr}",
+        )
+        away_btn.callback = self._on_force_win_away_click
+        self.add_item(away_btn)
+
+        home_team = cog.teams[self.home_abbr]
+        home_name = home_team.get("school") or home_team["name"]
+        home_is_winner = force_win_abbr == self.home_abbr
+        home_btn = discord.ui.Button(
+            label=f"✅ {home_name} Force Win" if home_is_winner else f"Force Win: {home_name}",
+            style=discord.ButtonStyle.success if home_is_winner else discord.ButtonStyle.secondary,
+            disabled=home_is_winner,
+            custom_id=f"force_win_game:{self.game_id}:{self.home_abbr}",
+        )
+        home_btn.callback = self._on_force_win_home_click
+        self.add_item(home_btn)
 
     async def _sync_channel_card(self, game, week, week_data, roster, relevant_deadline):
         await _sync_channel_card(self.cog.bot, self.cog, game, week, week_data, roster, relevant_deadline)
@@ -1781,10 +1822,7 @@ class CompleteGameView(discord.ui.View):
             relevant_deadline = week_data.get("deadline") if game["type"] == "user" else None
 
             embed, file = await _build_thread_card(self.cog, game)
-            new_view = CompleteGameView(
-                cog=self.cog, game_id=self.game_id,
-                completed=(game.get("status") == "completed"), scheduled=True, show_schedule_button=True,
-            )
+            new_view = CompleteGameView(cog=self.cog, game=game, show_schedule_button=True)
             edit_kwargs = {"embed": embed, "view": new_view, **as_edit_kwargs(file)}
             await interaction.response.edit_message(**edit_kwargs)
             await self._sync_channel_card(game, week, week_data, roster, relevant_deadline)
@@ -1793,6 +1831,17 @@ class CompleteGameView(discord.ui.View):
         await interaction.followup.send("📅 Marked as scheduled.", ephemeral=True)
 
     async def _on_complete_click(self, interaction: discord.Interaction):
+        await self._finalize_completion(interaction, status="completed", winner_abbr=None)
+
+    async def _on_force_win_away_click(self, interaction: discord.Interaction):
+        await self._finalize_completion(interaction, status="force_win", winner_abbr=self.away_abbr)
+
+    async def _on_force_win_home_click(self, interaction: discord.Interaction):
+        await self._finalize_completion(interaction, status="force_win", winner_abbr=self.home_abbr)
+
+    async def _finalize_completion(self, interaction: discord.Interaction, status: str, winner_abbr):
+        """Shared by Mark Completed and both Force Win buttons -- they all
+        end the game, just with a different status/winner recorded."""
         result = await _load_authorized_game(interaction, self.game_id)
         if result is None:
             return
@@ -1806,17 +1855,18 @@ class CompleteGameView(discord.ui.View):
                 return
             roster = load_roster()
 
-            game["status"] = "completed"
+            game["status"] = status
+            if winner_abbr is not None:
+                game["winner"] = winner_abbr
+            else:
+                game.pop("winner", None)
             save_season(season)
 
             week_data = season["weeks"][str(week)]
             relevant_deadline = week_data.get("deadline") if game["type"] == "user" else None
 
             embed, file = await _build_thread_card(self.cog, game)
-            new_view = CompleteGameView(
-                cog=self.cog, game_id=self.game_id,
-                completed=True, scheduled=game.get("scheduled", False), show_schedule_button=(game["type"] == "user"),
-            )
+            new_view = CompleteGameView(cog=self.cog, game=game, show_schedule_button=(game["type"] == "user"))
             edit_kwargs = {"embed": embed, "view": new_view, **as_edit_kwargs(file)}
             await interaction.response.edit_message(**edit_kwargs)
             await self._sync_channel_card(game, week, week_data, roster, relevant_deadline)
@@ -1825,7 +1875,8 @@ class CompleteGameView(discord.ui.View):
                 thread_id = game["thread_id"]
                 try:
                     thread = self.cog.bot.get_channel(thread_id) or await self.cog.bot.fetch_channel(thread_id)
-                    await thread.send("✅ This game has been marked completed. This thread will be deleted in 5 minutes.")
+                    label, _ = _status_label(game, self.cog.teams)
+                    await thread.send(f"✅ This game has been marked **{label}**. This thread will be deleted in 5 minutes.")
                 except (discord.NotFound, discord.HTTPException):
                     pass
 
@@ -1839,6 +1890,8 @@ class CompleteGameView(discord.ui.View):
                 save_season(season)
 
         await refresh_dashboard(self.cog.bot)
+
+
 
 
 
@@ -1940,12 +1993,7 @@ class Scheduling(commands.Cog):
         for g in week_data.get("games", []):
             if g["type"] != "user":
                 continue
-            completed = g.get("status") == "completed"
-            scheduled = g.get("scheduled", False)
-            view = CompleteGameView(
-                cog=self, game_id=g["game_id"],
-                completed=completed, scheduled=scheduled, show_schedule_button=True,
-            )
+            view = CompleteGameView(cog=self, game=g, show_schedule_button=True)
             self.bot.add_view(view)
 
     async def handle_team_vacated(self, abbr: str):
@@ -2548,7 +2596,7 @@ class Scheduling(commands.Cog):
                 # Owner thread-posting permissions were already granted above in the single
                 # batched edit() call before this loop started.
 
-                game_view = CompleteGameView(cog=self, game_id=g["game_id"], show_schedule_button=True)
+                game_view = CompleteGameView(cog=self, game=g, show_schedule_button=True)
                 thread_embed, thread_file = await _build_thread_card(self, g)
                 await thread.send(
                     f"<@{away_owner_id}> <@{home_owner_id}> use this thread to schedule your game and report completion.{deadline_line}",
@@ -2715,7 +2763,7 @@ class Scheduling(commands.Cog):
                 created_new_thread = True
 
             # Repost a fresh buttons message (with the current card image).
-            game_view = CompleteGameView(cog=self, game_id=g["game_id"], show_schedule_button=True)
+            game_view = CompleteGameView(cog=self, game=g, show_schedule_button=True)
             thread_embed, thread_file = await _build_thread_card(self, g)
             await thread.send(
                 f"<@{away_owner_id}> <@{home_owner_id}> use this thread to schedule your game and report completion.{deadline_line}",
