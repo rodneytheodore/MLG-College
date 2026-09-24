@@ -1678,7 +1678,15 @@ async def _refresh_week_tables_impl(bot: commands.Bot, cog: "Scheduling", week: 
     if file is not None:
         embed.set_image(url="attachment://game_table.png")
 
-    thread_chips = " ".join(f"<#{g['thread_id']}>" for g in user_games if g.get("thread_id"))
+    # thread_delete_at gets set the moment a game is marked completed/force-won
+    # (see _finalize_completion) -- once that's set, the thread is on its way
+    # out (or already gone), so a <#thread_id> mention for it would render as
+    # a broken "# unknown" chip. Excluding those keeps the list to threads
+    # that actually still exist.
+    thread_chips = " ".join(
+        f"<#{g['thread_id']}>" for g in user_games
+        if g.get("thread_id") and not g.get("thread_delete_at")
+    )
     if thread_chips:
         embed.add_field(name="Game Threads", value=thread_chips, inline=False)
 
