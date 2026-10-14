@@ -24,7 +24,7 @@ from utils.data import (
     resolve_team,
     ADMIN_ROLE_NAME,
 )
-from utils.responses import send_ephemeral
+from utils.responses import send_ephemeral, send_ephemeral_followup
 from utils.matchup_image import as_send_kwargs, as_edit_kwargs
 from utils.game_render import build_game_table_file
 from cogs.scheme_cards import build_compact_scheme_card_embed, ExpandSchemeCardView
@@ -1452,6 +1452,69 @@ async def _build_thread_card(cog: "Scheduling", game: dict) -> tuple[discord.Emb
     return embed, file
 
 
+async def _create_live_game_thread(
+    cog: "Scheduling", guild: discord.Guild, channel: discord.TextChannel,
+    week: int, game: dict, roster: dict, deadline: str | None,
+) -> str | None:
+    """Creates a game thread for a single USER game added via /add_game or
+    /add_games_bulk to a week that's already live. A week's channel is only
+    given per-member 'post in threads' overwrites for the games it knew
+    about at the moment /advance_week built it (see _do_advance_week) -- a
+    game added after that needs those same two owners granted the overwrite
+    on the existing channel before its thread is created, otherwise neither
+    owner can post in it. Mirrors the thread intro + buttons + scheme cards
+    every other user game thread gets. Returns an error string on failure
+    (the game stays staged either way -- this only affects whether it has a
+    live thread yet), or None on success."""
+    # The Admin role's thread-posting overwrite was already baked into this
+    # channel at creation time (_do_advance_week) -- only the two new game
+    # owners need a fresh per-member overwrite added here.
+    owner_overwrite = discord.PermissionOverwrite(send_messages_in_threads=True, use_application_commands=True)
+    for uid in filter(None, (roster.get(game["home"], {}).get("user_id"), roster.get(game["away"], {}).get("user_id"))):
+        member = guild.get_member(uid)
+        if member:
+            try:
+                await channel.set_permissions(member, overwrite=owner_overwrite)
+            except discord.HTTPException as e:
+                return f"Couldn't grant thread access: {e}"
+
+    try:
+        thread = await channel.create_thread(
+            name=f"{game['away']} vs {game['home']} — {week_display_name(week)}",
+            type=discord.ChannelType.public_thread,
+        )
+    except discord.HTTPException as e:
+        return f"Couldn't create a thread: {e}"
+
+    home_owner_id = roster.get(game["home"], {}).get("user_id")
+    away_owner_id = roster.get(game["away"], {}).get("user_id")
+    deadline_line = f"\n**Due:** {deadline}" if deadline else ""
+
+    game_view = CompleteGameView(cog=cog, game=game, show_schedule_button=True)
+    thread_embed, thread_file = await _build_thread_card(cog, game)
+    await thread.send(
+        f"<@{away_owner_id}> <@{home_owner_id}> use this thread to schedule your game and report completion.{deadline_line}",
+        embed=thread_embed,
+        view=game_view,
+        allowed_mentions=discord.AllowedMentions(users=True),
+        **as_send_kwargs(thread_file),
+    )
+
+    scheme_cards_cog = cog.bot.get_cog("SchemeCards")
+    if scheme_cards_cog is not None:
+        all_cards = load_scheme_cards()
+        for team_abbr in (game["home"], game["away"]):
+            team_card = all_cards.get(team_abbr)
+            if not team_card or (not team_card.get("offense") and not team_card.get("defense")):
+                continue
+            card_embed = build_compact_scheme_card_embed(scheme_cards_cog.teams[team_abbr], team_card)
+            card_view = ExpandSchemeCardView(abbr=team_abbr)
+            await thread.send(embed=card_embed, view=card_view, allowed_mentions=discord.AllowedMentions.none())
+
+    game["thread_id"] = thread.id
+    return None
+
+
 class CpuGameTableView(discord.ui.View):
     """Persistent 'Mark Game Completed' button shown under the CPU games
     table image for one week. Clicking it pops an ephemeral picker scoped
@@ -2086,48 +2149,80 @@ class Scheduling(commands.Cog):
             await send_ephemeral(interaction, "A team can't play itself.")
             return
 
+        # A live week can mean a Discord API round trip below (granting thread
+        # access + creating the thread), so defer now rather than risk the
+        # 3-second interaction-response window.
+        await interaction.response.defer(ephemeral=True)
+
         season = load_season()
         week, week_label = resolve_target_week(season, target)
         week_key = str(week)
 
-        week_data = season.setdefault("weeks", {}).setdefault(week_key, {
-            "status": "upcoming",
-            "channel_id": None,
-            "games": [],
-        })
+        async with _get_week_lock(week):
+            season = load_season()
+            week_data = season.setdefault("weeks", {}).setdefault(week_key, {
+                "status": "upcoming",
+                "channel_id": None,
+                "games": [],
+            })
 
-        if week_data.get("status") == "active":
-            await send_ephemeral(interaction, f"{week_display_name(week)} is already active. Games can't be added to a live week.")
-            return
+            # Prevent double-booking a team in the same week
+            for g in week_data["games"]:
+                if home_abbr in (g["home"], g["away"]) or away_abbr in (g["home"], g["away"]):
+                    conflict = home_abbr if home_abbr in (g["home"], g["away"]) else away_abbr
+                    await send_ephemeral_followup(interaction, f"`{conflict}` is already scheduled in a game this week.")
+                    return
 
-        # Prevent double-booking a team in the same week
-        for g in week_data["games"]:
-            if home_abbr in (g["home"], g["away"]) or away_abbr in (g["home"], g["away"]):
-                conflict = home_abbr if home_abbr in (g["home"], g["away"]) else away_abbr
-                await send_ephemeral(interaction, f"`{conflict}` is already scheduled in a game this week.")
-                return
+            roster = load_roster()
+            game_type = classify_game(home_abbr, away_abbr, roster)
+            game_number = len(week_data["games"]) + 1
 
-        roster = load_roster()
-        game_type = classify_game(home_abbr, away_abbr, roster)
-        game_number = len(week_data["games"]) + 1
+            game = {
+                "game_id": f"w{week}_g{game_number}",
+                "home": home_abbr,
+                "away": away_abbr,
+                "type": game_type,
+                "status": "scheduled",
+                "scheduled": False,
+                "thread_id": None,
+                "message_id": None,
+            }
+            week_data["games"].append(game)
 
-        week_data["games"].append({
-            "game_id": f"w{week}_g{game_number}",
-            "home": home_abbr,
-            "away": away_abbr,
-            "type": game_type,
-            "status": "scheduled",
-            "scheduled": False,
-            "thread_id": None,
-            "message_id": None,
-        })
+            is_live = week_data.get("status") == "active"
+            thread_note = ""
+            if is_live and game_type == "user":
+                channel_id = week_data.get("channel_id")
+                channel = interaction.guild.get_channel(channel_id) if channel_id else None
+                if channel is None:
+                    thread_note = (
+                        "\n⚠️ Couldn't find this week's live games channel — the game was "
+                        "staged, but it has no thread yet."
+                    )
+                else:
+                    error = await _create_live_game_thread(
+                        self, interaction.guild, channel, week, game, roster, week_data.get("deadline")
+                    )
+                    if error:
+                        thread_note = f"\n⚠️ {error} — the game was staged, but it has no thread yet."
 
-        save_season(season)
+            save_season(season)
 
-        await send_ephemeral(
+            if is_live:
+                await _refresh_week_tables_impl(self.bot, self, week)
+
+        live_note = ""
+        if is_live:
+            live_note = (
+                " This week is already live — a game thread was created for the two owners."
+                if game_type == "user" else
+                " This week is already live — it now shows in the shared games table."
+            )
+
+        await send_ephemeral_followup(
             interaction,
             f"Added to **{week_label}**: {self.teams[away_abbr]['name']} vs "
-            f"{self.teams[home_abbr]['name']} ({game_type.upper()})\n"
+            f"{self.teams[home_abbr]['name']} ({game_type.upper()}).{live_note}{thread_note}\n"
             f"Run `/view_week` to see the full staged list."
         )
 
@@ -2201,6 +2296,11 @@ class Scheduling(commands.Cog):
             await send_ephemeral(interaction, "Couldn't read that file. Make sure it's plain text (UTF-8).")
             return
 
+        # A live week means thread creation below (a real Discord API round
+        # trip per user game), so defer now rather than risk the 3-second
+        # interaction-response window.
+        await interaction.response.defer(ephemeral=True)
+
         season = load_season()
         roster = load_roster()
 
@@ -2230,7 +2330,10 @@ class Scheduling(commands.Cog):
                 "teams_in_use": teams_in_use,
                 "game_number": len(week_data["games"]) + 1,
                 "added": [],
-                "blocked": week_data.get("status") == "active",
+                # Live weeks aren't blocked anymore -- games are staged AND
+                # given a live thread (if USER) below, once parsing is done.
+                "is_live": week_data.get("status") == "active",
+                "new_user_games": [],
             }
             week_states[week_num] = state
             return state
@@ -2255,10 +2358,7 @@ class Scheduling(commands.Cog):
                     )
                     continue
                 active_week_num = int(header_match.group(1))
-                state = get_week_state(active_week_num)
-                if state["blocked"] and not state.get("blocked_reported"):
-                    errors.append(f"Week {active_week_num}: already active — all lines under this header were skipped.")
-                    state["blocked_reported"] = True
+                get_week_state(active_week_num)
                 continue
 
             lines_seen += 1
@@ -2269,13 +2369,8 @@ class Scheduling(commands.Cog):
                 active_week_num = week_num
                 state = get_week_state(active_week_num)
                 state["week_label"] = week_label
-                if state["blocked"] and not state.get("blocked_reported"):
-                    errors.append(f"{week_label}: already active — games can't be added to a live week.")
-                    state["blocked_reported"] = True
 
             state = week_states[active_week_num]
-            if state["blocked"]:
-                continue
 
             away_raw, home_raw = _split_matchup_line(line)
             if away_raw is None:
@@ -2306,7 +2401,7 @@ class Scheduling(commands.Cog):
                 continue
 
             game_type = classify_game(home_abbr, away_abbr, roster)
-            state["week_data"]["games"].append({
+            game = {
                 "game_id": f"w{active_week_num}_g{state['game_number']}",
                 "home": home_abbr,
                 "away": away_abbr,
@@ -2315,7 +2410,10 @@ class Scheduling(commands.Cog):
                 "scheduled": False,
                 "thread_id": None,
                 "message_id": None,
-            })
+            }
+            state["week_data"]["games"].append(game)
+            if state["is_live"] and game_type == "user":
+                state["new_user_games"].append(game)
             teams_in_use[home_abbr] = home_abbr
             teams_in_use[away_abbr] = away_abbr
             state["added"].append(
@@ -2328,8 +2426,33 @@ class Scheduling(commands.Cog):
             save_season(season)
 
         if lines_seen == 0:
-            await send_ephemeral(interaction, "That file didn't have any matchup lines in it.")
+            await send_ephemeral_followup(interaction, "That file didn't have any matchup lines in it.")
             return
+
+        # Any USER game staged into a week that's already active needs its
+        # live thread created now -- one lock + one table refresh per
+        # affected week, after everything for it has been staged.
+        thread_errors = []
+        for week_num, state in week_states.items():
+            if not state["new_user_games"]:
+                continue
+            channel_id = state["week_data"].get("channel_id")
+            channel = interaction.guild.get_channel(channel_id) if channel_id else None
+            if channel is None:
+                thread_errors.append(f"{state['week_label']}: live but couldn't find its games channel — added game(s) have no thread yet.")
+                continue
+            async with _get_week_lock(week_num):
+                for game in state["new_user_games"]:
+                    error = await _create_live_game_thread(
+                        self, interaction.guild, channel, week_num, game, roster, state["week_data"].get("deadline")
+                    )
+                    if error:
+                        thread_errors.append(
+                            f"{state['week_label']} — {self.teams[game['away']]['name']} vs "
+                            f"{self.teams[game['home']]['name']}: {error}"
+                        )
+                save_season(season)
+                await _refresh_week_tables_impl(self.bot, self, week_num)
 
         summary_lines = [f"Added {total_added} game(s) across {len(week_states)} week(s):"]
         for week_num in sorted(week_states):
@@ -2337,12 +2460,17 @@ class Scheduling(commands.Cog):
             if not state["added"]:
                 continue
             summary_lines.append("")
-            summary_lines.append(f"**{state['week_label']}** — {len(state['added'])} game(s):")
+            live_tag = " — LIVE" if state["is_live"] else ""
+            summary_lines.append(f"**{state['week_label']}**{live_tag} — {len(state['added'])} game(s):")
             summary_lines.extend(f"- {line}" for line in state["added"])
         if errors:
             summary_lines.append("")
             summary_lines.append(f"**{len(errors)} line(s) skipped:**")
             summary_lines.extend(f"- {e}" for e in errors)
+        if thread_errors:
+            summary_lines.append("")
+            summary_lines.append(f"**{len(thread_errors)} thread creation issue(s):**")
+            summary_lines.extend(f"- {e}" for e in thread_errors)
         summary_lines.append("")
         summary_lines.append("Run `/view_week` to see the full staged list for a given week.")
 
@@ -2350,14 +2478,14 @@ class Scheduling(commands.Cog):
 
         if len(message) > 1900:
             results_file = discord.File(io.BytesIO(message.encode("utf-8")), filename="bulk_add_results.txt")
-            await send_ephemeral(
+            await send_ephemeral_followup(
                 interaction,
                 f"Added {total_added} game(s) across {len(week_states)} week(s), "
                 f"{len(errors)} line(s) skipped — full details attached.",
                 file=results_file,
             )
         else:
-            await send_ephemeral(interaction, message)
+            await send_ephemeral_followup(interaction, message)
 
     @add_games_bulk.autocomplete("target")
     async def add_games_bulk_target_autocomplete(self, interaction: discord.Interaction, current: str):

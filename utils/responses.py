@@ -31,7 +31,8 @@ async def send_ephemeral(interaction: discord.Interaction, content: str = None, 
 
 
 async def send_ephemeral_followup(interaction: discord.Interaction, content: str = None, *,
-                                   embed: discord.Embed = None, delete_after: int = AUTO_CLEAR_SECONDS):
+                                   embed: discord.Embed = None, file: discord.File = None,
+                                   delete_after: int = AUTO_CLEAR_SECONDS):
     """Sends an ephemeral followup message, then deletes it automatically after delete_after seconds.
     Use this instead of interaction.followup.send(..., ephemeral=True) directly."""
     kwargs = {"ephemeral": True}
@@ -39,6 +40,8 @@ async def send_ephemeral_followup(interaction: discord.Interaction, content: str
         kwargs["content"] = content
     if embed is not None:
         kwargs["embed"] = embed
+    if file is not None:
+        kwargs["file"] = file
 
     message = await interaction.followup.send(**kwargs)
 
