@@ -348,7 +348,7 @@ def get_announcement_message(current_phase: str, new_phase: str | None, week: in
         ("postseason", "offseason_players_leaving"): f"📤 **The season has concluded and the offseason is now underway.** Players Leaving is now live — review your roster for early departures and transfers out of the program.{both_dl}",
         ("offseason_players_leaving", "offseason_transfer_portal"): f"🔄 **Transfer Portal is now open!** Players are on the move. Check which players have entered the portal and make your decisions accordingly.{both_dl}",
         ("offseason_transfer_portal", "offseason_national_signing_day"): f"✍️ **National Signing Day & Position Changes** — Check out where you finished in the recruiting rankings and finalize any position switches before the offseason training cycle begins.{both_dl}",
-        ("offseason_national_signing_day", "offseason_training"): "💪 **Offseason Training is complete!** This is where programs are built. Hopefully your players made the most of the offseason!",
+        ("offseason_national_signing_day", "offseason_training"): f"💪 **Offseason Training is complete!** This is where programs are built. Hopefully your players made the most of the offseason!{both_dl}",
         ("offseason_training", "offseason_encourage_transfers"): f"🚪 **Encourage Transfers** — Last chance to move on from players who don't fit your program. Make your decisions and get ready for a new season.{both_dl}",
         ("offseason_encourage_transfers", "preseason"): f"🏈 **A new season is approaching!** Offseason is complete. Preseason is here — rosters are set and the next dynasty year is on the horizon. Time to scout players for the next recruiting class!{both_dl}",
     }
@@ -407,6 +407,33 @@ HOUR_OPTIONS = (
 )
 
 MINUTE_OPTIONS = [(":00", ":00"), (":30", ":30")]
+
+# /advance_week only: a quick-turnaround deadline that skips the day/hour/minute
+# steps. Kept out of DAY_OPTIONS because /extend_deadline shares that list and
+# its wizard does int(value) on every pick.
+TWELVE_HOURS_VALUE = "12h"
+ADVANCE_DAY_OPTIONS = [("+12 Hours", TWELVE_HOURS_VALUE)] + DAY_OPTIONS
+QUICK_USER_HOURS = 12
+QUICK_CPU_HOURS = 6  # a 1-day-earlier CPU deadline would already be in the past on a 12h window
+
+
+def build_quick_deadline_strings(user_hours: int = QUICK_USER_HOURS, cpu_hours: int = QUICK_CPU_HOURS) -> tuple[str, str]:
+    """Build (user_deadline, cpu_deadline) for the '+12 Hours' option: exact
+    offsets from now, rounded to the nearest :00/:30 like the normal picker's
+    minute choices, shown in the same 'Friday, July 04 at 10:30 PM EDT' format."""
+    now_utc = datetime.now(timezone.utc)
+
+    def fmt(hours: int) -> str:
+        dt = (now_utc + timedelta(hours=hours)).astimezone(EASTERN).replace(second=0, microsecond=0)
+        if dt.minute < 15:
+            dt = dt.replace(minute=0)
+        elif dt.minute < 45:
+            dt = dt.replace(minute=30)
+        else:
+            dt = (dt + timedelta(hours=1)).replace(minute=0)
+        return f"{dt.strftime('%A, %B %d')} at {dt.hour % 12 or 12}:{dt.strftime('%M %p %Z')}"
+
+    return fmt(user_hours), fmt(cpu_hours)
 
 
 def build_deadline_strings(
@@ -489,7 +516,8 @@ class AdvanceWeekWizard:
         self.cog = cog
         self.season = load_season()
         self.action: str | None = None        # "next_week" or "next_phase"
-        self.day_offset: int | None = None    # None = no deadline
+        self.day_offset: int | None = None    # None = no deadline (or quick_deadline)
+        self.quick_deadline: bool = False     # "+12 Hours" option -- skips the hour/minute steps
         self.hour_str: str | None = None
         self.minute_str: str | None = None
         self.week0_has_games: bool | None = None  # only relevant for preseason → regular_season
@@ -527,9 +555,21 @@ class AdvanceWeekWizard:
 
     @property
     def deadline_tuple(self) -> tuple[str | None, str | None]:
+        if self.quick_deadline:
+            return build_quick_deadline_strings()
         if self.day_offset is None:
             return None, None
         return build_deadline_strings(self.day_offset, self.hour_str, self.minute_str)
+
+    @property
+    def uses_general_deadline(self) -> bool:
+        """True when this advance lands in (or moves within) an offseason
+        stage. Those have no games, so the announcement and confirm screen
+        show one general 'Due' date instead of User/CPU game deadlines."""
+        if self.current_stage.startswith("offseason_"):
+            return True  # Transfer Portal weeks, Signing Day, Training, Encourage Transfers
+        nxt = self.next_phase_key
+        return self.action == "next_phase" and bool(nxt) and nxt.startswith("offseason_")
 
     def _action_label(self) -> str:
         if self.action == "next_week":
@@ -586,7 +626,7 @@ class AdvanceWeekWizard:
 
     async def _send_day_select(self, interaction: discord.Interaction):
         """Initial send — used when no action choice precedes it."""
-        view = AdvanceSelectView(DAY_OPTIONS, "Deadline — how many days out?", self._on_day_pick)
+        view = AdvanceSelectView(ADVANCE_DAY_OPTIONS, "Deadline — how far out?", self._on_day_pick)
         await interaction.response.send_message(
             f"**Advance → {self._action_label()}** — set a deadline:",
             view=view,
@@ -595,15 +635,20 @@ class AdvanceWeekWizard:
 
     async def _edit_day_select(self, interaction: discord.Interaction):
         """Edit — used after action choice."""
-        view = AdvanceSelectView(DAY_OPTIONS, "Deadline — how many days out?", self._on_day_pick)
+        view = AdvanceSelectView(ADVANCE_DAY_OPTIONS, "Deadline — how far out?", self._on_day_pick)
         await interaction.response.edit_message(
             content=f"**Advance → {self._action_label()}** — set a deadline:",
             view=view,
         )
 
     async def _on_day_pick(self, interaction: discord.Interaction, value: str):
+        self.quick_deadline = False
         if value == "no_deadline":
             self.day_offset = None
+            await self._after_deadline_set(interaction)
+        elif value == TWELVE_HOURS_VALUE:
+            self.day_offset = None
+            self.quick_deadline = True
             await self._after_deadline_set(interaction)
         else:
             self.day_offset = int(value)
@@ -672,10 +717,12 @@ class AdvanceWeekWizard:
         else:
             action_line = f"🔄 Advance to **{self.next_phase_label}**"
 
-        dl_line = (
-            f"**User games due:** {deadline}\n**CPU games due:** {cpu_deadline}"
-            if deadline else "**No deadline set.**"
-        )
+        if not deadline:
+            dl_line = "**No deadline set.**"
+        elif self.uses_general_deadline:
+            dl_line = f"**Due:** {deadline}"
+        else:
+            dl_line = f"**User games due:** {deadline}\n**CPU games due:** {cpu_deadline}"
 
         view = ConfirmAdvanceView(bot=self.bot, wizard=self)
         await interaction.response.edit_message(
@@ -719,13 +766,15 @@ class AdvanceWeekWizard:
                     current_phase=self.current_stage,
                     new_phase=None,
                     week=week,
-                    deadline=deadline,
-                    cpu_deadline=cpu_deadline,
+                    deadline=None,
+                    cpu_deadline=None,
+                    general_deadline=deadline,
                 )
                 await ann_channel.send(
                     f"{find_mlg_mention(guild)} {msg}".strip(),
                     allowed_mentions=discord.AllowedMentions(roles=True),
                 )
+            stage_label = PHASE_DISPLAY.get(self.current_stage, self.current_stage)
             await interaction.followup.send(
                 f"✅ Advanced to **{stage_label} — {week_label}**.", ephemeral=True
             )
@@ -825,13 +874,16 @@ class AdvanceWeekWizard:
             guild.text_channels,
         )
         if ann_channel:
+            # One general due date (no User/CPU split) when there are no games:
+            # a Preseason advance with no Week 0 games, or any offseason stage.
+            general = (old_stage == "preseason" and not self.week0_has_games) or self.uses_general_deadline
             msg = get_announcement_message(
                 current_phase=old_stage,
                 new_phase=new_stage,
                 week=None,
-                deadline=None if (old_stage == "preseason" and not self.week0_has_games) else deadline,
-                cpu_deadline=None if (old_stage == "preseason" and not self.week0_has_games) else cpu_deadline,
-                general_deadline=deadline if (old_stage == "preseason" and not self.week0_has_games) else None,
+                deadline=None if general else deadline,
+                cpu_deadline=None if general else cpu_deadline,
+                general_deadline=deadline if general else None,
             )
             await ann_channel.send(
                 f"{find_mlg_mention(guild)} {msg}".strip(),
@@ -876,8 +928,9 @@ class AdvanceWeekWizard:
                 current_phase="offseason_encourage_transfers",
                 new_phase="preseason",
                 week=None,
-                deadline=deadline,
-                cpu_deadline=cpu_deadline,
+                deadline=None,
+                cpu_deadline=None,
+                general_deadline=deadline,
             )
             await ann_channel.send(
                 f"{find_mlg_mention(guild)} {msg}".strip(),
