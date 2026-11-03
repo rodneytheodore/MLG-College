@@ -1602,12 +1602,17 @@ class CpuGameTableView(discord.ui.View):
                 continue
             home_owner_id = roster.get(g["home"], {}).get("user_id")
             away_owner_id = roster.get(g["away"], {}).get("user_id")
-            if not admin and interaction.user.id not in filter(None, (home_owner_id, away_owner_id)):
+            owner_ids = [oid for oid in (home_owner_id, away_owner_id) if oid]
+            # Only games that involve a user are markable. Games between two
+            # unowned teams are skipped, even for admins.
+            if not owner_ids:
+                continue
+            if not admin and interaction.user.id not in owner_ids:
                 continue
             pending.append(g)
 
         if not pending:
-            msg = "No pending CPU games this week." if admin else "You have no pending CPU games this week."
+            msg = "No pending games with users this week." if admin else "You have no pending CPU games this week."
             await interaction.response.send_message(msg, ephemeral=True)
             return
 
