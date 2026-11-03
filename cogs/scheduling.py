@@ -1598,7 +1598,11 @@ class CpuGameTableView(discord.ui.View):
         admin = is_admin(interaction)
         pending = []
         for g in week_data.get("games", []):
-            if g["type"] != "cpu" or g.get("status") == "completed":
+            if g.get("status") == "completed":
+                continue
+            # Admins can also close out user vs user games from here;
+            # everyone else only gets CPU games.
+            if g["type"] != "cpu" and not (admin and g["type"] == "user"):
                 continue
             home_owner_id = roster.get(g["home"], {}).get("user_id")
             away_owner_id = roster.get(g["away"], {}).get("user_id")
@@ -1618,7 +1622,10 @@ class CpuGameTableView(discord.ui.View):
 
         options = [
             discord.SelectOption(
-                label=f"{self.cog.teams[g['away']]['name']} vs {self.cog.teams[g['home']]['name']}"[:100],
+                label=(
+                    f"{self.cog.teams[g['away']]['name']} vs {self.cog.teams[g['home']]['name']}"
+                    + (" (User)" if g["type"] == "user" else "")
+                )[:100],
                 value=g["game_id"],
             )
             for g in pending[:25]
@@ -1644,6 +1651,12 @@ class CpuGameTableView(discord.ui.View):
                     return
 
                 game2["status"] = "completed"
+                game2.pop("winner", None)
+                if game2["type"] == "user" and game2.get("thread_id"):
+                    # Same 5-minute thread cleanup as the in-thread Mark Completed button.
+                    game2["thread_delete_at"] = (
+                        datetime.now(timezone.utc) + timedelta(minutes=5)
+                    ).isoformat()
                 save_season(season2)
 
                 away_name = self.cog.teams[game2["away"]]["name"]
@@ -1651,6 +1664,12 @@ class CpuGameTableView(discord.ui.View):
                 await select_interaction.response.edit_message(
                     content=f"Marked **{away_name} vs {home_name}** completed.", view=None,
                 )
+                if game2["type"] == "user" and game2.get("thread_id"):
+                    try:
+                        thread = self.cog.bot.get_channel(game2["thread_id"]) or await self.cog.bot.fetch_channel(game2["thread_id"])
+                        await thread.send("✅ This game has been marked **Completed** by an admin. This thread will be deleted in 5 minutes.")
+                    except (discord.NotFound, discord.HTTPException):
+                        pass
                 await _refresh_week_tables_impl(self.cog.bot, self.cog, week2)
 
             await refresh_dashboard(self.cog.bot)
